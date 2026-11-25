@@ -98,5 +98,6 @@ function foragerServerPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: './',
   plugins: [react(), foragerServerPlugin()],
 });

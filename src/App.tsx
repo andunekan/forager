@@ -51,7 +51,9 @@ function preloadImageUrls(urls: Array<string | undefined>) {
 export default function App() {
   const [view, setView] = useState<ActiveView>('recipes');
   const [recipes, setRecipes] = useState<Recipe[]>(() =>
-    loadFromStorage(STORAGE_KEYS.recipes, SEED_RECIPES, 'meadow.recipes.v1'),
+    loadFromStorage(STORAGE_KEYS.recipes, SEED_RECIPES, 'meadow.recipes.v1').map((r) =>
+      r.image?.startsWith('/images/') ? { ...r, image: `.${r.image}` } : r,
+    ),
   );
   const [plan, setPlan] = useState<PlannedMeal[]>(() =>
     loadFromStorage(STORAGE_KEYS.plan, SEED_PLAN, 'meadow.plan.v1'),

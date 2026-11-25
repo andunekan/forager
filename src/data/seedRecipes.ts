@@ -7,7 +7,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-orzo',
     title: 'Lemon Herb Orzo with Asparagus',
-    image: '/images/lemon-herb-orzo.jpg',
+    image: './images/lemon-herb-orzo.jpg',
     servings: 4,
     prepMinutes: 25,
     ingredients: [
@@ -34,7 +34,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-salmon',
     title: 'Miso Ginger Glazed Salmon Bowl',
-    image: '/images/miso-ginger-salmon.jpg',
+    image: './images/miso-ginger-salmon.jpg',
     servings: 2,
     prepMinutes: 25,
     ingredients: [
@@ -63,7 +63,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-toast',
     title: 'Whipped Ricotta & Heirloom Tomato Toast',
-    image: '/images/ricotta-tomato-toast.jpg',
+    image: './images/ricotta-tomato-toast.jpg',
     servings: 2,
     prepMinutes: 10,
     ingredients: [
@@ -88,7 +88,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-beans',
     title: 'Creamy Tuscan White Beans & Kale',
-    image: '/images/creamy-tuscan-beans.jpg',
+    image: './images/creamy-tuscan-beans.jpg',
     servings: 4,
     prepMinutes: 20,
     ingredients: [
@@ -116,7 +116,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-oats',
     title: 'Berry & Toasted Almond Overnight Oats',
-    image: '/images/berry-almond-oats.jpg',
+    image: './images/berry-almond-oats.jpg',
     servings: 2,
     prepMinutes: 5,
     ingredients: [
@@ -141,7 +141,7 @@ export const SEED_RECIPES: Recipe[] = [
   {
     id: 'seed-curry',
     title: 'Golden Coconut Chickpea Curry',
-    image: '/images/golden-coconut-curry.jpg',
+    image: './images/golden-coconut-curry.jpg',
     servings: 4,
     prepMinutes: 30,
     ingredients: [

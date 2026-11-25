@@ -1,6 +1,8 @@
 # Forager
 
-A light, minimalist recipe library, weekly meal planner, and Walmart Pickup grocery list — available as both a **web app** and a **Chrome / Brave browser extension** (Manifest V3 Side Panel).
+A light, minimalist recipe library, weekly meal planner, and Walmart Pickup grocery list — available as both a **web app** ([andunekan.github.io/forager](https://andunekan.github.io/forager/)) and a **Chrome / Brave browser extension** (Manifest V3 Side Panel).
+
+All personal data (recipes, notes, meal plans, Walmart store #, and past Walmart orders) is stored strictly locally in your browser — nothing is uploaded to GitHub or shared with other visitors.
 
 ## Features
 
