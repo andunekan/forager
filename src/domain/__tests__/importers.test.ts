@@ -98,5 +98,30 @@ describe('importers', () => {
       expect(recipe.steps).toHaveLength(3);
       expect(recipe.sourceType).toBe('photo');
     });
+
+    it('separates ingredients from wrapped steps even without headings and fixes OCR typos', () => {
+      const messyOcr = `
+        Weeknight Garlic Noodles
+        Serves 4
+        l lb spaghetti
+        4 thsp unsalted butter
+        6 cloves garlic, minced
+        2 tbsp soy sauce
+        Salt and pepper to taste
+        Bring a large pot of salted water to a boil
+        and cook spaghetti until al dente.
+        Melt butter in a skillet over medium heat, add garlic,
+        and toss with noodles and soy sauce.
+      `;
+
+      const recipe = parseOcrRecipeText(messyOcr);
+      expect(recipe.title).toBe('Weeknight Garlic Noodles');
+      expect(recipe.servings).toBe(4);
+      expect(recipe.ingredients).toHaveLength(5);
+      expect(recipe.ingredients[0].quantity).toBe(1);
+      expect(recipe.ingredients[1].unit).toBe('tbsp');
+      expect(recipe.steps).toHaveLength(2);
+      expect(recipe.steps[0]).toContain('al dente');
+    });
   });
 });

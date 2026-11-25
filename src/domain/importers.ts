@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import type { Recipe } from '../types/recipe';
 import { createId, parseIngredient } from './ingredientParser';
+import { cleanOcrText } from './photoOcr';
 
 function splitListField(value: string): string[] {
   if (!value) return [];
@@ -281,9 +282,47 @@ export function parseRecipeFromHtml(html: string, sourceUrl?: string): Recipe | 
   return null;
 }
 
+const UNIT_PATTERN =
+  /\b(cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|ounces?|lbs?|pounds?|grams?|kg|ml|cloves?|cans?|packages?|pkgs?|slices?|bunches?|sprigs?|heads?|pinch(?:es)?|stalks?|bags?|fillets?)\b/i;
+
+const COOKING_VERB_START =
+  /^(preheat|heat|warm|bring|boil|simmer|melt|cook|bake|roast|saute|sauté|fry|grill|whisk|stir|mix|combine|fold|toss|blend|pour|place|arrange|spread|serve|season|chop|slice|dice|drain|rinse|let|cover|remove|transfer|add|brush|top|garnish|chill|refrigerate|cool)\b/i;
+
+function looksLikeIngredientLine(line: string): boolean {
+  if (COOKING_VERB_START.test(line)) return false;
+  if (line.length > 85) return false;
+  if (/^\d+[.)]\s+[A-Z]/.test(line)) return false;
+  if (/^(\d|½|¼|¾|⅓|⅔|⅛)/.test(line)) return true;
+  if (UNIT_PATTERN.test(line) && !/[.!?]$/.test(line)) return true;
+  if (/\bto taste\b|\bfor serving\b|\bfor garnish\b/i.test(line)) return true;
+  return false;
+}
+
+function mergeWrappedSteps(rawLines: string[]): string[] {
+  const merged: string[] = [];
+  for (const raw of rawLines) {
+    const isNumbered = /^\d+[.)]\s+/.test(raw);
+    const cleaned = raw.replace(/^\d+[.)]\s*/, '').trim();
+    if (!cleaned) continue;
+
+    const prev = merged[merged.length - 1];
+    const shouldAppend =
+      Boolean(prev) &&
+      !isNumbered &&
+      !/[.!?]$/.test(prev) &&
+      (/^[a-z]/.test(cleaned) || !COOKING_VERB_START.test(cleaned));
+
+    if (shouldAppend) {
+      merged[merged.length - 1] = `${prev} ${cleaned}`;
+    } else {
+      merged.push(cleaned);
+    }
+  }
+  return merged;
+}
+
 export function parseOcrRecipeText(rawText: string, imageDataUrl?: string): Recipe {
-  const lines = rawText
-    .replace(/\r\n/g, '\n')
+  const lines = cleanOcrText(rawText)
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
@@ -292,7 +331,7 @@ export function parseOcrRecipeText(rawText: string, imageDataUrl?: string): Reci
   let servings = 4;
   let prepMinutes: number | undefined;
   const ingredients: string[] = [];
-  const steps: string[] = [];
+  const rawSteps: string[] = [];
 
   let section: 'header' | 'ingredients' | 'steps' = 'header';
 
@@ -309,10 +348,9 @@ export function parseOcrRecipeText(rawText: string, imageDataUrl?: string): Reci
       continue;
     }
 
-    // Detect servings/time metadata line
-    const servingsMatch = lower.match(/(?:serves|servings|yield)\s*:?\s*(\d+)/);
+    const servingsMatch = lower.match(/(?:serves|servings|yield|makes)\s*:?\s*(\d+)/);
     const timeMatch = lower.match(/(\d+)\s*(?:min|mins|minutes)/);
-    if (servingsMatch || timeMatch) {
+    if ((servingsMatch || timeMatch) && line.length < 48 && !COOKING_VERB_START.test(line)) {
       if (servingsMatch) servings = parseInt(servingsMatch[1], 10) || 4;
       if (timeMatch) prepMinutes = parseInt(timeMatch[1], 10);
       if (section === 'header') continue;
@@ -324,19 +362,23 @@ export function parseOcrRecipeText(rawText: string, imageDataUrl?: string): Reci
     }
 
     if (section === 'ingredients') {
-      ingredients.push(line.replace(/^[•\-*]\s*/, ''));
-    } else if (section === 'steps') {
-      steps.push(line.replace(/^\d+[.)]\s*/, ''));
-    } else {
-      // Heuristic when headers weren't printed on the recipe card
-      if (/^(\d|½|¼|¾|⅓|⅔)/.test(line) && line.length < 75 && !/^\d+[.)]\s+[A-Z]/.test(line)) {
-        ingredients.push(line);
+      if (COOKING_VERB_START.test(line) && line.length > 35) {
+        section = 'steps';
+        rawSteps.push(line);
       } else {
-        steps.push(line.replace(/^\d+[.)]\s*/, ''));
+        ingredients.push(line.replace(/^[•\-*]\s*/, ''));
       }
+    } else if (section === 'steps') {
+      rawSteps.push(line);
+    } else if (looksLikeIngredientLine(line)) {
+      ingredients.push(line);
+    } else {
+      section = 'steps';
+      rawSteps.push(line);
     }
   }
 
+  const steps = mergeWrappedSteps(rawSteps);
   const now = new Date().toISOString();
   return {
     id: createId('rec'),

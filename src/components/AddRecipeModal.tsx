@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Download, FileSpreadsheet, Globe, Link2, Upload, X } from 'lucide-react';
+import {
+  Camera,
+  Download,
+  FileSpreadsheet,
+  Globe,
+  Link2,
+  RotateCw,
+  Sparkles,
+  Upload,
+  X,
+} from 'lucide-react';
 import {
   parseCsvRecipes,
   parseOcrRecipeText,
@@ -8,10 +18,17 @@ import {
   SAMPLE_SPREADSHEET_CSV,
 } from '../domain/importers';
 import { createId, formatIngredient, parseIngredient } from '../domain/ingredientParser';
+import {
+  extractRecipeWithGeminiVision,
+  preprocessPhotoForOcr,
+} from '../domain/photoOcr';
 import { importRecipeFromActiveTab, isChromeExtension } from '../extension/chromeBridge';
 import type { Recipe } from '../types/recipe';
+import { loadFromStorage, saveToStorage } from '../utils/storage';
 
 type ImportTab = 'write' | 'link' | 'photo' | 'spreadsheet';
+
+const GEMINI_KEY_STORAGE = 'forager.geminiApiKey.v1';
 
 interface AddRecipeModalProps {
   onClose: () => void;
@@ -37,10 +54,25 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
   const [urlPreview, setUrlPreview] = useState<Recipe | null>(null);
   const [fallbackPaste, setFallbackPaste] = useState('');
 
-  // Photo / Camera OCR state
+  // Photo / Camera OCR & Vision state
+  const [rawPhotoUrl, setRawPhotoUrl] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoRotation, setPhotoRotation] = useState(0);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
-  const [ocrText, setOcrText] = useState('');
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [scannedTitle, setScannedTitle] = useState('');
+  const [scannedServings, setScannedServings] = useState('4');
+  const [scannedMinutes, setScannedMinutes] = useState('');
+  const [scannedIngredients, setScannedIngredients] = useState('');
+  const [scannedSteps, setScannedSteps] = useState('');
+  const [scannedNotes, setScannedNotes] = useState('');
+  const [hasScannedResult, setHasScannedResult] = useState(false);
+
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() =>
+    loadFromStorage(GEMINI_KEY_STORAGE, ''),
+  );
+  const [showVisionSettings, setShowVisionSettings] = useState(false);
+
   const [cameraActive, setCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -48,6 +80,10 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
   // Spreadsheet state
   const [sheetPreview, setSheetPreview] = useState<Recipe[]>([]);
   const [sheetError, setSheetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    saveToStorage(GEMINI_KEY_STORAGE, geminiApiKey.trim());
+  }, [geminiApiKey]);
 
   useEffect(() => {
     return () => {
@@ -59,6 +95,16 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setCameraActive(false);
+  };
+
+  const applyScannedRecipeToFields = (rec: Recipe) => {
+    setScannedTitle(rec.title);
+    setScannedServings(String(rec.servings || 4));
+    setScannedMinutes(rec.prepMinutes ? String(rec.prepMinutes) : '');
+    setScannedIngredients(rec.ingredients.map((i) => formatIngredient(i)).join('\n'));
+    setScannedSteps(rec.steps.join('\n'));
+    setScannedNotes(rec.notes || '');
+    setHasScannedResult(true);
   };
 
   const handleSaveManual = (e: React.FormEvent) => {
@@ -81,6 +127,33 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
         .filter(Boolean),
       notes: notes.trim(),
       sourceType: 'manual',
+      createdAt: now,
+      updatedAt: now,
+    };
+    onAddRecipes([recipe], addToWeek);
+    onClose();
+  };
+
+  const handleSaveScannedPhoto = () => {
+    if (!scannedTitle.trim()) return;
+    const now = new Date().toISOString();
+    const recipe: Recipe = {
+      id: createId('rec'),
+      title: scannedTitle.trim(),
+      image: photoPreview ?? undefined,
+      servings: Math.max(1, parseInt(scannedServings, 10) || 4),
+      prepMinutes: parseInt(scannedMinutes, 10) || undefined,
+      ingredients: scannedIngredients
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => parseIngredient(l)),
+      steps: scannedSteps
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean),
+      notes: scannedNotes.trim(),
+      sourceType: 'photo',
       createdAt: now,
       updatedAt: now,
     };
@@ -124,33 +197,84 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
     }
   };
 
-  const handleRunOcr = async (imageSource: string) => {
-    setOcrStatus('Reading recipe from photo…');
+  const runPhotoRecognition = async (sourceDataUrl: string, rotationDeg: number) => {
+    setOcrBusy(true);
+    setOcrStatus('Enhancing photo contrast…');
+
+    let displayUrl = sourceDataUrl;
+    let ocrUrl = sourceDataUrl;
+    try {
+      const processed = await preprocessPhotoForOcr(sourceDataUrl, rotationDeg);
+      displayUrl = processed.displayDataUrl;
+      ocrUrl = processed.ocrDataUrl;
+      setPhotoPreview(displayUrl);
+    } catch {
+      setPhotoPreview(sourceDataUrl);
+    }
+
+    const trimmedKey = geminiApiKey.trim();
+    if (trimmedKey) {
+      setOcrStatus('Reading recipe with Gemini Vision…');
+      try {
+        const visionRecipe = await extractRecipeWithGeminiVision(displayUrl, trimmedKey);
+        applyScannedRecipeToFields(visionRecipe);
+        setOcrStatus('Recognized with Gemini Vision — review and save below.');
+        setOcrBusy(false);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gemini Vision failed';
+        setOcrStatus(`${msg} Falling back to local OCR…`);
+      }
+    }
+
+    setOcrStatus('Reading printed text locally…');
     try {
       const Tesseract = await import('tesseract.js');
-      const { data } = await Tesseract.recognize(imageSource, 'eng');
+      const { data } = await Tesseract.recognize(ocrUrl, 'eng', {
+        logger: (m: { status?: string; progress?: number }) => {
+          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+            setOcrStatus(`Reading printed text… ${Math.round(m.progress * 100)}%`);
+          }
+        },
+      });
       const recognized = data.text.trim();
-      setOcrText(recognized);
-      setOcrStatus(
-        recognized
-          ? 'Review or refine the text below.'
-          : 'Could not read text clearly — type or edit below.',
-      );
+      if (recognized) {
+        const parsed = parseOcrRecipeText(recognized, displayUrl);
+        applyScannedRecipeToFields(parsed);
+        setOcrStatus(
+          'Review or refine below. For handwritten or magazine pages, add an optional Gemini Vision key above.',
+        );
+      } else {
+        setHasScannedResult(true);
+        setOcrStatus('Could not read text clearly — rotate photo, add a Gemini Vision key, or type below.');
+      }
     } catch {
-      setOcrStatus('Photo ready — type or paste the recipe text below.');
+      setHasScannedResult(true);
+      setOcrStatus('Photo ready — enter or adjust the recipe fields below.');
+    } finally {
+      setOcrBusy(false);
     }
   };
 
   const handlePhotoFile = (file: File | undefined) => {
     if (!file) return;
     stopCamera();
+    setPhotoRotation(0);
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result || '');
+      setRawPhotoUrl(dataUrl);
       setPhotoPreview(dataUrl);
-      void handleRunOcr(dataUrl);
+      void runPhotoRecognition(dataUrl, 0);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleRotatePhoto = () => {
+    if (!rawPhotoUrl) return;
+    const nextRot = (photoRotation + 90) % 360;
+    setPhotoRotation(nextRot);
+    void runPhotoRecognition(rawPhotoUrl, nextRot);
   };
 
   const handleStartCamera = async () => {
@@ -184,10 +308,12 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
       stopCamera();
+      setPhotoRotation(0);
+      setRawPhotoUrl(dataUrl);
       setPhotoPreview(dataUrl);
-      void handleRunOcr(dataUrl);
+      void runPhotoRecognition(dataUrl, 0);
     }
   };
 
@@ -498,6 +624,49 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
 
           {tab === 'photo' && (
             <div className="form-grid">
+              {/* Optional AI Vision setting for handwritten / magazine recipes */}
+              <div className="bookmarklet-card" style={{ padding: '0.7rem 0.9rem' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <span style={{ fontSize: '0.82rem', color: 'var(--lavender-ink)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={14} />
+                    {geminiApiKey.trim()
+                      ? 'Gemini Vision active (high accuracy)'
+                      : 'AI Vision optional (best for handwriting & cookbooks)'}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowVisionSettings((v) => !v)}
+                  >
+                    {showVisionSettings ? 'Hide' : geminiApiKey.trim() ? 'Key saved' : 'Add key'}
+                  </button>
+                </div>
+
+                {showVisionSettings && (
+                  <div className="form-grid" style={{ marginTop: '0.6rem', gap: '0.45rem' }}>
+                    <input
+                      type="password"
+                      className="field-input"
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      placeholder="Paste free Gemini API key (stored only in your browser)"
+                      aria-label="Gemini API key"
+                    />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
+                      Stored privately in localStorage. Photos go straight from your browser to
+                      Google&apos;s Gemini 2.5 Flash API.
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {cameraActive ? (
                 <div className="form-grid">
                   <video ref={videoRef} className="camera-preview" playsInline muted />
@@ -540,45 +709,122 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
               )}
 
               {photoPreview && (
-                <img
-                  src={photoPreview}
-                  alt="Captured recipe"
-                  className="recipe-hero-img"
-                  style={{ maxHeight: '190px' }}
-                />
-              )}
-
-              {ocrStatus && (
-                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--ink-secondary)' }}>
-                  {ocrStatus}
-                </p>
-              )}
-
-              {(photoPreview || ocrText) && (
-                <>
-                  <textarea
-                    rows={7}
-                    className="field-textarea"
-                    value={ocrText}
-                    onChange={(e) => setOcrText(e.target.value)}
-                    placeholder={'Recipe Title\n\nIngredients:\n1 cup flour\n…\n\nDirections:\n1. Mix and bake.'}
-                    aria-label="Scanned recipe text"
+                <div className="form-grid" style={{ gap: '0.55rem' }}>
+                  <img
+                    src={photoPreview}
+                    alt="Captured recipe"
+                    className="recipe-hero-img"
+                    style={{ maxHeight: '200px', objectFit: 'contain', background: 'var(--bg-subtle)' }}
                   />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--ink-secondary)' }}>
+                      {ocrStatus || ''}
+                    </span>
+                    <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="btn btn-surface btn-sm"
+                        disabled={ocrBusy}
+                        onClick={handleRotatePhoto}
+                      >
+                        <RotateCw size={13} />
+                        Rotate
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-lavender btn-sm"
+                        disabled={ocrBusy || !rawPhotoUrl}
+                        onClick={() => {
+                          if (rawPhotoUrl) void runPhotoRecognition(rawPhotoUrl, photoRotation);
+                        }}
+                      >
+                        Rescan
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {hasScannedResult && (
+                <div className="form-grid">
+                  <div>
+                    <label className="field-label" htmlFor="scan-title">
+                      Recipe name
+                    </label>
+                    <input
+                      id="scan-title"
+                      className="field-input"
+                      value={scannedTitle}
+                      onChange={(e) => setScannedTitle(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-row">
+                    <div>
+                      <label className="field-label" htmlFor="scan-servings">
+                        Servings
+                      </label>
+                      <input
+                        id="scan-servings"
+                        type="number"
+                        min={1}
+                        className="field-input"
+                        value={scannedServings}
+                        onChange={(e) => setScannedServings(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="field-label" htmlFor="scan-minutes">
+                        Minutes
+                      </label>
+                      <input
+                        id="scan-minutes"
+                        type="number"
+                        min={1}
+                        className="field-input"
+                        value={scannedMinutes}
+                        onChange={(e) => setScannedMinutes(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="field-label" htmlFor="scan-ingredients">
+                      Ingredients (one per line)
+                    </label>
+                    <textarea
+                      id="scan-ingredients"
+                      rows={5}
+                      className="field-textarea"
+                      value={scannedIngredients}
+                      onChange={(e) => setScannedIngredients(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="field-label" htmlFor="scan-steps">
+                      Method (one step per line)
+                    </label>
+                    <textarea
+                      id="scan-steps"
+                      rows={4}
+                      className="field-textarea"
+                      value={scannedSteps}
+                      onChange={(e) => setScannedSteps(e.target.value)}
+                    />
+                  </div>
+
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <button
                       type="button"
                       className="btn btn-sage"
-                      disabled={!ocrText.trim()}
-                      onClick={() => {
-                        const parsed = parseOcrRecipeText(ocrText, photoPreview ?? undefined);
-                        onAddRecipes([parsed], addToWeek);
-                        onClose();
-                      }}
+                      disabled={!scannedTitle.trim() || ocrBusy}
+                      onClick={handleSaveScannedPhoto}
                     >
                       Save recipe
                     </button>
                   </div>
-                </>
+                </div>
               )}
             </div>
           )}
