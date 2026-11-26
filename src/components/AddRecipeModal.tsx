@@ -700,7 +700,7 @@ export function AddRecipeModal({
                     />
                     <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
                       Stored privately in localStorage. Photos go straight from your browser to
-                      Google&apos;s Gemini 2.5 Flash API.
+                      Google&apos;s Gemini 4 Hydrogen API.
                     </span>
                   </div>
                 )}

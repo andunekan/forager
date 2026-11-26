@@ -103,12 +103,14 @@ export function getFirebaseDb(): Firestore | null {
   return app ? getFirestore(app) : null;
 }
 
+export const GEMINI_VISION_MODEL = 'gemini-4-hydrogen';
+
 export function getFirebaseVisionModel() {
   const app = getFirebaseApp();
   if (!app) return null;
   const ai = getAI(app, { backend: new GoogleAIBackend() });
   return getGenerativeModel(ai, {
-    model: 'gemini-2.5-flash',
+    model: GEMINI_VISION_MODEL,
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.1,

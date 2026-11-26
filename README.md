@@ -8,7 +8,7 @@ A light, minimalist recipe library, weekly meal planner, and Walmart Pickup groc
 - **Multi-Source Recipe Import**:
   - Import spreadsheets (`.csv`, `.xlsx`)
   - Import from recipe links (JSON-LD `schema.org/Recipe` extraction — or one-click **Save recipe from current tab** in the browser extension)
-  - Capture or upload recipe photos with contrast/rotation preprocessing, local OCR, and **Gemini 2.5 Flash Vision** (via Firebase AI Logic when signed in with Google, or optional personal API key)
+  - Capture or upload recipe photos with contrast/rotation preprocessing, local OCR, and **Gemini 4 Hydrogen** vision (via Firebase AI Logic when signed in with Google, or optional personal API key)
   - Write recipes manually
 - **Smart Recipe Transforms**: Apply presets (*Substitute dairy*, *Gluten-free*, *Vegetarian*, *Plant-based*, *Nut-free*) or custom natural-language transforms (`"swap butter for olive oil"`, `"double the garlic"`, `"remove parmesan"`) with one-click **Undo**.
 - **One-Meal-Per-Day Weekly Planner**: Plan `Mon`–`Sun`, step servings directly on any meal, and customize/transform a recipe for a specific night without changing your base library recipe.

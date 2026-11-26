@@ -223,7 +223,7 @@ export async function extractRecipeWithGeminiVision(
     'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photo.',
   ].join(' ');
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
 
   const resp = await fetch(endpoint, {
     method: 'POST',

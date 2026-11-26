@@ -80,6 +80,7 @@ describe('photoOcr', () => {
       'test-api-key',
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/models/gemini-4-hydrogen:generateContent');
     expect(recipe.title).toBe('Crispy Chickpea Tacos');
     expect(recipe.ingredients).toHaveLength(3);
     expect(recipe.steps).toHaveLength(2);
