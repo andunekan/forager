@@ -1,6 +1,6 @@
 import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
 import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
-import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
   getAuth,
   GoogleAuthProvider,
@@ -81,7 +81,7 @@ export function getFirebaseApp(): FirebaseApp | null {
   if (!appCheckInitialized && config.recaptchaSiteKey && typeof window !== 'undefined') {
     try {
       initializeAppCheck(cachedApp, {
-        provider: new ReCaptchaV3Provider(config.recaptchaSiteKey),
+        provider: new ReCaptchaEnterpriseProvider(config.recaptchaSiteKey),
         isTokenAutoRefreshEnabled: true,
       });
       appCheckInitialized = true;
