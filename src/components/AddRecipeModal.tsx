@@ -23,6 +23,8 @@ import {
   preprocessPhotoForOcr,
 } from '../domain/photoOcr';
 import { importRecipeFromActiveTab, isChromeExtension } from '../extension/chromeBridge';
+import type { FirebaseUserSummary } from '../firebase/firebaseClient';
+import { extractRecipeWithFirebaseAi } from '../firebase/firebaseVision';
 import type { Recipe } from '../types/recipe';
 import { loadFromStorage, saveToStorage } from '../utils/storage';
 
@@ -31,11 +33,20 @@ type ImportTab = 'write' | 'link' | 'photo' | 'spreadsheet';
 const GEMINI_KEY_STORAGE = 'forager.geminiApiKey.v1';
 
 interface AddRecipeModalProps {
+  firebaseEnabled?: boolean;
+  firebaseUser?: FirebaseUserSummary | null;
+  onSignInWithGoogle?: () => Promise<void>;
   onClose: () => void;
   onAddRecipes: (recipes: Recipe[], addToWeek: boolean) => void;
 }
 
-export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
+export function AddRecipeModal({
+  firebaseEnabled = false,
+  firebaseUser = null,
+  onSignInWithGoogle,
+  onClose,
+  onAddRecipes,
+}: AddRecipeModalProps) {
   const [tab, setTab] = useState<ImportTab>('write');
   const [addToWeek, setAddToWeek] = useState(true);
 
@@ -210,6 +221,20 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
       setPhotoPreview(displayUrl);
     } catch {
       setPhotoPreview(sourceDataUrl);
+    }
+
+    if (firebaseEnabled && firebaseUser) {
+      setOcrStatus('Reading recipe with Gemini Vision…');
+      try {
+        const visionRecipe = await extractRecipeWithFirebaseAi(displayUrl);
+        applyScannedRecipeToFields(visionRecipe);
+        setOcrStatus('Recognized with Gemini Vision — review and save below.');
+        setOcrBusy(false);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Firebase AI Vision failed';
+        setOcrStatus(`${msg} Falling back to local OCR…`);
+      }
     }
 
     const trimmedKey = geminiApiKey.trim();
@@ -624,7 +649,7 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
 
           {tab === 'photo' && (
             <div className="form-grid">
-              {/* Optional AI Vision setting for handwritten / magazine recipes */}
+              {/* AI Vision status: Firebase AI Logic when signed in, or optional BYO key */}
               <div className="bookmarklet-card" style={{ padding: '0.7rem 0.9rem' }}>
                 <div
                   style={{
@@ -636,20 +661,34 @@ export function AddRecipeModal({ onClose, onAddRecipes }: AddRecipeModalProps) {
                 >
                   <span style={{ fontSize: '0.82rem', color: 'var(--lavender-ink)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                     <Sparkles size={14} />
-                    {geminiApiKey.trim()
-                      ? 'Gemini Vision active (high accuracy)'
-                      : 'AI Vision optional (best for handwriting & cookbooks)'}
+                    {firebaseEnabled && firebaseUser
+                      ? 'Gemini Vision ready via Google sign-in'
+                      : firebaseEnabled
+                        ? 'Sign in with Google for AI recipe photo scanning'
+                        : geminiApiKey.trim()
+                          ? 'Gemini Vision active (high accuracy)'
+                          : 'AI Vision optional (best for handwriting & cookbooks)'}
                   </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setShowVisionSettings((v) => !v)}
-                  >
-                    {showVisionSettings ? 'Hide' : geminiApiKey.trim() ? 'Key saved' : 'Add key'}
-                  </button>
+                  {firebaseEnabled && !firebaseUser && onSignInWithGoogle ? (
+                    <button
+                      type="button"
+                      className="btn btn-lavender btn-sm"
+                      onClick={() => void onSignInWithGoogle()}
+                    >
+                      Sign in
+                    </button>
+                  ) : !firebaseEnabled ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setShowVisionSettings((v) => !v)}
+                    >
+                      {showVisionSettings ? 'Hide' : geminiApiKey.trim() ? 'Key saved' : 'Add key'}
+                    </button>
+                  ) : null}
                 </div>
 
-                {showVisionSettings && (
+                {!firebaseEnabled && showVisionSettings && (
                   <div className="form-grid" style={{ marginTop: '0.6rem', gap: '0.45rem' }}>
                     <input
                       type="password"

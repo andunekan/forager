@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CalendarPlus, Leaf, Maximize2, Plus, Search, Sparkles, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarPlus, Leaf, LogIn, Maximize2, Plus, Search, Sparkles, X } from 'lucide-react';
 import { AddRecipeModal } from './components/AddRecipeModal';
 import { GroceryListView } from './components/GroceryListView';
 import { RecipeDetailModal } from './components/RecipeDetailModal';
@@ -18,6 +18,20 @@ import {
   type WalmartPurchaseItem,
 } from './domain/walmartOrderHistory';
 import { isChromeExtension, openExtensionFullTab } from './extension/chromeBridge';
+import {
+  loadCloudState,
+  mergeLocalAndCloudState,
+  saveCloudState,
+  subscribeCloudState,
+  type ForagerUserState,
+} from './firebase/cloudSync';
+import {
+  isFirebaseConfigured,
+  signInWithGoogle,
+  signOutUser,
+  subscribeToAuth,
+  type FirebaseUserSummary,
+} from './firebase/firebaseClient';
 import type { GroceryItem, PlannedMeal, Recipe } from './types/recipe';
 import { loadFromStorage, saveToStorage } from './utils/storage';
 
@@ -82,6 +96,45 @@ export default function App() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUserSummary | null>(null);
+  const [cloudReady, setCloudReady] = useState(false);
+  const applyingRemoteRef = useRef(false);
+  const firebaseEnabled = isFirebaseConfigured();
+
+  const currentUserStateRef = useRef<ForagerUserState>({
+    recipes,
+    plan,
+    checkedMap,
+    extraItems,
+    walmartItemIds,
+    walmartHistory,
+    walmartFulfillment,
+    walmartStoreId,
+    updatedAt: '',
+  });
+
+  useEffect(() => {
+    currentUserStateRef.current = {
+      recipes,
+      plan,
+      checkedMap,
+      extraItems,
+      walmartItemIds,
+      walmartHistory,
+      walmartFulfillment,
+      walmartStoreId,
+      updatedAt: new Date().toISOString(),
+    };
+  }, [
+    recipes,
+    plan,
+    checkedMap,
+    extraItems,
+    walmartItemIds,
+    walmartHistory,
+    walmartFulfillment,
+    walmartStoreId,
+  ]);
 
   useEffect(() => {
     preloadImageUrls(recipes.map((r) => r.image));
@@ -96,11 +149,110 @@ export default function App() {
   useEffect(() => saveToStorage(STORAGE_KEYS.fulfillment, walmartFulfillment), [walmartFulfillment]);
   useEffect(() => saveToStorage(STORAGE_KEYS.storeId, walmartStoreId), [walmartStoreId]);
 
+  // Subscribe to Firebase Auth state
+  useEffect(() => {
+    if (!firebaseEnabled) return;
+    return subscribeToAuth((user) => {
+      setFirebaseUser(user);
+      if (!user) setCloudReady(false);
+    });
+  }, [firebaseEnabled]);
+
+  // Load, merge, and subscribe to private Firestore state when signed in
+  useEffect(() => {
+    if (!firebaseUser) return;
+    let active = true;
+    let unsubscribeSnapshot: (() => void) | null = null;
+
+    const applyState = (next: ForagerUserState) => {
+      applyingRemoteRef.current = true;
+      setRecipes(
+        next.recipes.map((r) => (r.image?.startsWith('/images/') ? { ...r, image: `.${r.image}` } : r)),
+      );
+      setPlan(next.plan);
+      setCheckedMap(next.checkedMap || {});
+      setExtraItems(next.extraItems || []);
+      setWalmartItemIds(next.walmartItemIds || {});
+      setWalmartHistory(next.walmartHistory || []);
+      setWalmartFulfillment(next.walmartFulfillment || 'pickup');
+      setWalmartStoreId(next.walmartStoreId || '');
+      window.setTimeout(() => {
+        applyingRemoteRef.current = false;
+      }, 50);
+    };
+
+    void (async () => {
+      try {
+        const cloud = await loadCloudState(firebaseUser.uid);
+        if (!active) return;
+        if (cloud) {
+          const merged = mergeLocalAndCloudState(currentUserStateRef.current, cloud);
+          applyState(merged);
+          await saveCloudState(firebaseUser.uid, merged);
+        } else {
+          await saveCloudState(firebaseUser.uid, currentUserStateRef.current);
+        }
+        if (!active) return;
+        setCloudReady(true);
+
+        unsubscribeSnapshot = subscribeCloudState(firebaseUser.uid, (remote) => {
+          if (!active) return;
+          applyState(remote);
+        });
+      } catch {
+        if (active) setCloudReady(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+      unsubscribeSnapshot?.();
+    };
+  }, [firebaseUser]);
+
+  // Debounced sync to private Firestore document on any local edit while signed in
+  useEffect(() => {
+    if (!firebaseUser || !cloudReady || applyingRemoteRef.current) return;
+    const timer = window.setTimeout(() => {
+      void saveCloudState(firebaseUser.uid, currentUserStateRef.current).catch(() => {
+        // Offline edits remain safe in localStorage and sync next time
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [
+    firebaseUser,
+    cloudReady,
+    recipes,
+    plan,
+    checkedMap,
+    extraItems,
+    walmartItemIds,
+    walmartHistory,
+    walmartFulfillment,
+    walmartStoreId,
+  ]);
+
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => {
       setToast((current) => (current === message ? null : current));
     }, 2400);
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const user = await signInWithGoogle();
+      if (user) {
+        showToast(`Signed in as ${user.displayName || user.email || 'Google user'}`);
+      }
+    } catch {
+      showToast('Sign-in was cancelled or unavailable');
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    await signOutUser();
+    showToast('Signed out — data stays saved locally');
   };
 
   const selectedRecipe = useMemo(
@@ -304,7 +456,32 @@ export default function App() {
             </button>
           </nav>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            {firebaseEnabled &&
+              (firebaseUser ? (
+                <button
+                  type="button"
+                  className="avatar-btn"
+                  title={`${firebaseUser.displayName || firebaseUser.email || 'Account'} · synced privately (click to sign out)`}
+                  aria-label="Sign out"
+                  onClick={() => void handleGoogleSignOut()}
+                >
+                  {firebaseUser.photoURL ? (
+                    <img src={firebaseUser.photoURL} alt="" className="avatar-img" />
+                  ) : (
+                    <span>{(firebaseUser.displayName || firebaseUser.email || 'U')[0].toUpperCase()}</span>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-surface btn-sm"
+                  onClick={() => void handleGoogleSignIn()}
+                >
+                  <LogIn size={14} />
+                  Sign in
+                </button>
+              ))}
             {isChromeExtension() && (
               <button
                 type="button"
@@ -505,6 +682,9 @@ export default function App() {
 
       {showAddModal && (
         <AddRecipeModal
+          firebaseEnabled={firebaseEnabled}
+          firebaseUser={firebaseUser}
+          onSignInWithGoogle={handleGoogleSignIn}
           onClose={() => setShowAddModal(false)}
           onAddRecipes={handleAddRecipes}
         />

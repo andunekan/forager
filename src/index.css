@@ -1372,6 +1372,33 @@ img {
   font-weight: 500;
 }
 
+.avatar-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sage-bg);
+  color: var(--sage-ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1.5px solid #c5dac0;
+  padding: 0;
+  transition: transform 160ms var(--ease-out);
+}
+
+.avatar-btn:hover {
+  transform: scale(1.04);
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 /* ==========================================================================
    Responsive
    ========================================================================== */
