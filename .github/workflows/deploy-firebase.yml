@@ -35,8 +35,20 @@ jobs:
           VITE_FIREBASE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_FIREBASE_RECAPTCHA_SITE_KEY }}
         run: npm run build
 
+      - name: Check Firebase deploy secrets
+        id: firebase_check
+        env:
+          HAS_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+          HAS_PID: ${{ secrets.VITE_FIREBASE_PROJECT_ID != '' }}
+        run: |
+          if [ "$HAS_SA" = "true" ] && [ "$HAS_PID" = "true" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to Firebase Hosting
-        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' && secrets.VITE_FIREBASE_PROJECT_ID != '' }}
+        if: steps.firebase_check.outputs.ready == 'true'
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
