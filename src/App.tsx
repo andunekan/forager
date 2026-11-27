@@ -604,18 +604,6 @@ export default function App() {
                         {recipe.title.slice(0, 1)}
                       </div>
                     )}
-                    <button
-                      type="button"
-                      className="recipe-quick-plan"
-                      aria-label={`Add ${recipe.title} to week`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleQuickPlanRecipe(recipe);
-                      }}
-                    >
-                      <CalendarPlus size={13} />
-                      Plan
-                    </button>
                   </div>
 
                   <div className="recipe-card-body">
@@ -629,6 +617,19 @@ export default function App() {
                         .join(' · ')}
                     </p>
                   </div>
+
+                  <button
+                    type="button"
+                    className="recipe-quick-plan"
+                    aria-label={`Add ${recipe.title} to week`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleQuickPlanRecipe(recipe);
+                    }}
+                  >
+                    <CalendarPlus size={14} />
+                    <span>Plan</span>
+                  </button>
                 </article>
               ))}
             </div>
