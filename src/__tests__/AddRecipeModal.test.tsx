@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AddRecipeModal } from '../components/AddRecipeModal';
 import { parseIngredient } from '../domain/ingredientParser';
 import * as photoOcr from '../domain/photoOcr';
+import * as firebaseClient from '../firebase/firebaseClient';
+import * as firebaseVision from '../firebase/firebaseVision';
 
 describe('AddRecipeModal — multi-page recipe photos & Gemini Vision feedback', () => {
   afterEach(() => {
@@ -12,6 +14,7 @@ describe('AddRecipeModal — multi-page recipe photos & Gemini Vision feedback',
   });
 
   it('uploads multiple recipe pages and scans all pages together with Gemini 4 Hydrogen when an API key is saved', async () => {
+    vi.spyOn(firebaseClient, 'isFirebaseAppCheckConfigured').mockReturnValue(false);
     window.localStorage.setItem('forager.geminiApiKey.v1', JSON.stringify('test-key-123'));
 
     vi.spyOn(photoOcr, 'preprocessPhotoForOcr').mockImplementation(async (dataUrl) => ({
@@ -62,7 +65,45 @@ describe('AddRecipeModal — multi-page recipe photos & Gemini Vision feedback',
     expect(within(pageList).queryByRole('button', { name: /view page 2/i })).not.toBeInTheDocument();
   });
 
+  it('uses Firebase AI Logic with Gemini 4 Hydrogen when Firebase and App Check are configured', async () => {
+    vi.spyOn(firebaseClient, 'isFirebaseAppCheckConfigured').mockReturnValue(true);
+    vi.spyOn(photoOcr, 'preprocessPhotoForOcr').mockImplementation(async (dataUrl) => ({
+      displayDataUrl: dataUrl,
+      ocrDataUrl: dataUrl,
+    }));
+
+    const firebaseVisionSpy = vi
+      .spyOn(firebaseVision, 'extractRecipeWithFirebaseAi')
+      .mockResolvedValue({
+        id: 'rec_fb_vision',
+        title: 'Cardamom Morning Buns',
+        servings: 12,
+        prepMinutes: 45,
+        ingredients: [parseIngredient('3 cups bread flour')],
+        steps: ['Mix dough and proof.', 'Shape with cardamom sugar and bake.'],
+        notes: '',
+        sourceType: 'photo',
+        createdAt: '2026-11-26T00:00:00Z',
+        updatedAt: '2026-11-26T00:00:00Z',
+      });
+
+    const user = userEvent.setup();
+    render(<AddRecipeModal firebaseEnabled onClose={vi.fn()} onAddRecipes={vi.fn()} />);
+
+    await user.click(screen.getByRole('tab', { name: /photo/i }));
+    expect(screen.getByText(/gemini 4 hydrogen vision ready/i)).toBeInTheDocument();
+
+    const page1 = new File(['bunpage1'], 'buns1.jpg', { type: 'image/jpeg' });
+    await user.upload(screen.getByLabelText(/upload recipe photo/i), page1);
+
+    await waitFor(() => {
+      expect(firebaseVisionSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByLabelText(/recipe name/i)).toHaveValue('Cardamom Morning Buns');
+  });
+
   it('explains clearly when Firebase AI needs App Check instead of silently hiding why local OCR ran', async () => {
+    vi.spyOn(firebaseClient, 'isFirebaseAppCheckConfigured').mockReturnValue(false);
     const user = userEvent.setup();
     render(
       <AddRecipeModal
