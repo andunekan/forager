@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarPlus, Leaf, LogIn, Maximize2, Plus, Search, Sparkles, X } from 'lucide-react';
+import {
+  ArrowUpDown,
+  CalendarPlus,
+  Leaf,
+  LogIn,
+  Maximize2,
+  Plus,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { AddRecipeModal } from './components/AddRecipeModal';
 import { GroceryListView } from './components/GroceryListView';
 import { RecipeDetailModal } from './components/RecipeDetailModal';
@@ -10,8 +20,10 @@ import { createId, parseIngredient } from './domain/ingredientParser';
 import {
   DEFAULT_MEAL_SLOT,
   findNextOpenDay,
+  moveMealToDay,
   suggestSerendipitousRecipe,
 } from './domain/mealPlanner';
+import { groupRecipesByProtein } from './domain/proteinClassifier';
 import type { WalmartFulfillment } from './domain/walmartCart';
 import {
   mergePurchaseHistory,
@@ -92,6 +104,7 @@ export default function App() {
   );
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortByProtein, setSortByProtein] = useState(false);
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
@@ -286,6 +299,11 @@ export default function App() {
     );
   }, [recipes, searchQuery]);
 
+  const proteinGroups = useMemo(
+    () => (sortByProtein ? groupRecipesByProtein(filteredRecipes) : []),
+    [filteredRecipes, sortByProtein],
+  );
+
   const spotlightRecipe = useMemo(
     () => (spotlightId ? recipes.find((r) => r.id === spotlightId) ?? null : null),
     [recipes, spotlightId],
@@ -367,6 +385,10 @@ export default function App() {
 
   const handleRemoveMeal = (mealId: string) => {
     setPlan((prev) => prev.filter((m) => m.id !== mealId));
+  };
+
+  const handleMoveMeal = (mealId: string, targetDayIndex: number) => {
+    setPlan((prev) => moveMealToDay(prev, mealId, targetDayIndex));
   };
 
   const handleToggleGrocery = (id: string) => {
@@ -528,6 +550,15 @@ export default function App() {
               </div>
               <button
                 type="button"
+                className={`btn ${sortByProtein ? 'btn-sage' : 'btn-surface'}`}
+                aria-pressed={sortByProtein}
+                onClick={() => setSortByProtein((prev) => !prev)}
+              >
+                <ArrowUpDown size={14} />
+                By protein
+              </button>
+              <button
+                type="button"
                 className="btn btn-lavender"
                 onClick={handleSurpriseMe}
               >
@@ -588,6 +619,61 @@ export default function App() {
               <h2>Nothing matched &ldquo;{searchQuery}&rdquo;</h2>
               <p>Try another ingredient or add something new to your library.</p>
             </div>
+          ) : sortByProtein ? (
+            <div className="protein-groups">
+              {proteinGroups.map((group) => (
+                <div key={group.protein} className="protein-group">
+                  <div className="protein-group-header">
+                    <h2 className="protein-group-heading">{group.protein}</h2>
+                    <span className="protein-group-count">{group.recipes.length}</span>
+                  </div>
+                  <div className="recipe-grid">
+                    {group.recipes.map((recipe) => (
+                      <article
+                        key={recipe.id}
+                        className="recipe-card"
+                        onClick={() => setSelectedRecipeId(recipe.id)}
+                      >
+                        <div className="recipe-card-media">
+                          {recipe.image ? (
+                            <img src={recipe.image} alt={recipe.title} decoding="sync" />
+                          ) : (
+                            <div className="recipe-card-fallback" aria-hidden="true">
+                              {recipe.title.slice(0, 1)}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="recipe-card-body">
+                          <h3 className="recipe-card-title">{recipe.title}</h3>
+                          <p className="recipe-card-meta">
+                            {[
+                              recipe.prepMinutes ? `${recipe.prepMinutes} min` : null,
+                              `${recipe.servings} servings`,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="recipe-quick-plan"
+                          aria-label={`Add ${recipe.title} to week`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleQuickPlanRecipe(recipe);
+                          }}
+                        >
+                          <CalendarPlus size={14} />
+                          <span>Plan</span>
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="recipe-grid">
               {filteredRecipes.map((recipe) => (
@@ -643,6 +729,7 @@ export default function App() {
             onAddMeal={handleAddMeal}
             onUpdateMeal={handleUpdateMeal}
             onRemoveMeal={handleRemoveMeal}
+            onMoveMeal={handleMoveMeal}
             onOpenRecipe={(recipe) => setSelectedRecipeId(recipe.id)}
             onGoToList={() => setView('list')}
           />

@@ -148,4 +148,44 @@ describe('Forager App — End-to-End User Flows', () => {
     ).toBeInTheDocument();
     expect(within(cartDialog).getAllByText(/from your orders/i).length).toBeGreaterThanOrEqual(1);
   });
+
+  it('sorts recipes by protein type and allows dragging planned meals to another day', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Toggle "By protein" in the recipe library
+    const sortBtn = screen.getByRole('button', { name: /by protein/i });
+    await user.click(sortBtn);
+    expect(sortBtn).toHaveAttribute('aria-pressed', 'true');
+
+    expect(screen.getByRole('heading', { name: 'Seafood' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Plant-based' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Eggs & Cheese' })).toBeInTheDocument();
+
+    // Switch to Week view and drag Monday's meal onto Thursday
+    await user.click(screen.getByRole('button', { name: /^week/i }));
+
+    const monday = screen.getByLabelText('Monday');
+    const thursday = screen.getByLabelText('Thursday');
+    const mondayMealCard = within(monday)
+      .getByRole('button', { name: 'Lemon Herb Orzo with Asparagus' })
+      .closest('[draggable="true"]');
+    expect(mondayMealCard).not.toBeNull();
+
+    // Simulate dragStart -> dragOver -> drop onto Thursday
+    const { fireEvent } = await import('@testing-library/react');
+    const dataTransfer = {
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData: () => {},
+      getData: () => '',
+    };
+    fireEvent.dragStart(mondayMealCard!, { dataTransfer });
+    fireEvent.dragOver(thursday, { dataTransfer });
+    fireEvent.drop(thursday, { dataTransfer });
+
+    // Meal should now live under Thursday, and Monday should show "Add meal"
+    expect(within(thursday).getByText('Lemon Herb Orzo with Asparagus')).toBeInTheDocument();
+    expect(within(monday).getByRole('button', { name: /add meal for monday/i })).toBeInTheDocument();
+  });
 });

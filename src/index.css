@@ -1464,6 +1464,93 @@ img {
   color: var(--sage-ink);
 }
 
+/* Weekly Planner Drag & Drop */
+.planned-meal-card[draggable='true'] {
+  cursor: grab;
+}
+
+.planned-meal-card[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.planned-meal-card.dragging {
+  opacity: 0.48;
+  transform: scale(0.985);
+}
+
+.day-column.drag-over {
+  border-color: var(--sage-ink);
+  background: rgba(230, 240, 227, 0.55);
+  box-shadow: 0 0 0 2px rgba(71, 102, 74, 0.14);
+}
+
+.meal-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  opacity: 0.55;
+  padding: 0.25rem 0.05rem;
+  margin-left: -0.15rem;
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  transition: opacity 150ms, color 150ms;
+}
+
+.planned-meal-card:hover .meal-drag-handle,
+.meal-drag-handle:active {
+  opacity: 1;
+  color: var(--ink-secondary);
+}
+
+/* Protein-Grouped Recipe Library */
+.protein-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.65rem;
+}
+
+.protein-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.protein-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.protein-group-heading {
+  font-family: var(--font-serif);
+  font-size: 1.08rem;
+  font-weight: 500;
+  color: var(--ink-primary);
+  margin: 0;
+}
+
+.protein-group-count {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.picker-protein-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.picker-protein-label {
+  font-family: var(--font-serif);
+  font-size: 0.86rem;
+  color: var(--ink-secondary);
+  padding: 0.35rem 0.2rem 0.1rem;
+}
+
 .import-tab.active-tab,
 .import-tab[aria-pressed='true'] {
   background: var(--bg-surface);

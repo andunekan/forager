@@ -48,6 +48,27 @@ export function findNextOpenDay(plan: PlannedMeal[]): number {
   return plan.length % 7;
 }
 
+export function moveMealToDay(
+  plan: PlannedMeal[],
+  mealId: string,
+  targetDayIndex: number,
+): PlannedMeal[] {
+  if (targetDayIndex < 0 || targetDayIndex > 6) return plan;
+  const source = plan.find((m) => m.id === mealId);
+  if (!source || source.dayIndex === targetDayIndex) return plan;
+
+  const sourceDay = source.dayIndex;
+  return plan.map((meal) => {
+    if (meal.id === mealId) {
+      return { ...meal, dayIndex: targetDayIndex };
+    }
+    if (meal.dayIndex === targetDayIndex) {
+      return { ...meal, dayIndex: sourceDay };
+    }
+    return meal;
+  });
+}
+
 export function suggestSerendipitousRecipe(
   library: Recipe[],
   currentPlan: PlannedMeal[],

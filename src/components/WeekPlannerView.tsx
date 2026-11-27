@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ArrowRight, Minus, Plus, Sparkles, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ArrowRight, ArrowUpDown, GripVertical, Minus, Plus, Sparkles, X } from 'lucide-react';
 import { formatIngredient, parseIngredient } from '../domain/ingredientParser';
 import {
   DAYS_OF_WEEK,
@@ -7,6 +7,7 @@ import {
   FULL_DAYS,
   suggestSerendipitousRecipe,
 } from '../domain/mealPlanner';
+import { groupRecipesByProtein } from '../domain/proteinClassifier';
 import { applyRecipeTransform, PRESET_TRANSFORMS } from '../domain/recipeTransforms';
 import type { PlannedMeal, Recipe } from '../types/recipe';
 
@@ -16,6 +17,7 @@ interface WeekPlannerViewProps {
   onAddMeal: (dayIndex: number, recipe: Recipe) => void;
   onUpdateMeal: (meal: PlannedMeal) => void;
   onRemoveMeal: (mealId: string) => void;
+  onMoveMeal: (mealId: string, targetDayIndex: number) => void;
   onOpenRecipe: (recipe: Recipe) => void;
   onGoToList: () => void;
 }
@@ -26,12 +28,19 @@ export function WeekPlannerView({
   onAddMeal,
   onUpdateMeal,
   onRemoveMeal,
+  onMoveMeal,
   onOpenRecipe,
   onGoToList,
 }: WeekPlannerViewProps) {
   const [pickingDay, setPickingDay] = useState<number | null>(null);
   const [adjustingMealId, setAdjustingMealId] = useState<string | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
+  const [pickerSortByProtein, setPickerSortByProtein] = useState(false);
+
+  const [draggingMealId, setDraggingMealId] = useState<string | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
+  const touchDragMealRef = useRef<string | null>(null);
+  const touchTargetDayRef = useRef<number | null>(null);
 
   const recipeMap = new Map(recipes.map((r) => [r.id, r]));
   const suggestion = suggestSerendipitousRecipe(recipes, plan);
@@ -48,6 +57,36 @@ export function WeekPlannerView({
   const filteredPickerRecipes = recipes.filter((r) =>
     r.title.toLowerCase().includes(pickerSearch.trim().toLowerCase()),
   );
+  const pickerProteinGroups = pickerSortByProtein
+    ? groupRecipesByProtein(filteredPickerRecipes)
+    : [];
+
+  const handleTouchMoveOnHandle = (e: React.TouchEvent) => {
+    if (!touchDragMealRef.current) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const dayEl = el?.closest<HTMLElement>('[data-day-index]');
+    if (dayEl) {
+      const idx = Number(dayEl.dataset.dayIndex);
+      if (Number.isFinite(idx)) {
+        touchTargetDayRef.current = idx;
+        setDragOverDay(idx);
+      }
+    }
+  };
+
+  const handleTouchEndOnHandle = () => {
+    const mealId = touchDragMealRef.current;
+    const targetDay = touchTargetDayRef.current;
+    if (mealId && targetDay !== null) {
+      onMoveMeal(mealId, targetDay);
+    }
+    touchDragMealRef.current = null;
+    touchTargetDayRef.current = null;
+    setDraggingMealId(null);
+    setDragOverDay(null);
+  };
 
   return (
     <section aria-label="Weekly meal planner">
@@ -57,7 +96,7 @@ export function WeekPlannerView({
           <p className="view-subtitle">
             {plan.length === 0
               ? 'Sketch out one meal for each day you plan to cook.'
-              : `${plan.length} meal${plan.length === 1 ? '' : 's'} planned`}
+              : `${plan.length} meal${plan.length === 1 ? '' : 's'} planned · drag to move days`}
           </p>
         </div>
 
@@ -78,9 +117,34 @@ export function WeekPlannerView({
       <div className="week-grid">
         {DAYS_OF_WEEK.map((day, dayIndex) => {
           const dayMeals = plan.filter((m) => m.dayIndex === dayIndex);
+          const isDropTarget = dragOverDay === dayIndex && draggingMealId !== null;
 
           return (
-            <div key={day} className="day-column day-column-single">
+            <div
+              key={day}
+              data-day-index={dayIndex}
+              aria-label={FULL_DAYS[dayIndex]}
+              className={`day-column day-column-single ${isDropTarget ? 'drag-over' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (dragOverDay !== dayIndex) setDragOverDay(dayIndex);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                  setDragOverDay((prev) => (prev === dayIndex ? null : prev));
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const mealId = draggingMealId || e.dataTransfer.getData('text/plain');
+                if (mealId) {
+                  onMoveMeal(mealId, dayIndex);
+                }
+                setDraggingMealId(null);
+                setDragOverDay(null);
+              }}
+            >
               <div className="day-header">
                 <span className="day-name">{day}</span>
               </div>
@@ -90,9 +154,40 @@ export function WeekPlannerView({
                   const baseRecipe = recipeMap.get(meal.recipeId);
                   if (!baseRecipe) return null;
                   const displayTitle = meal.customTitle || baseRecipe.title;
+                  const isDragging = draggingMealId === meal.id;
 
                   return (
-                    <div key={meal.id} className="planned-meal-card slot-dinner">
+                    <div
+                      key={meal.id}
+                      draggable
+                      className={`planned-meal-card slot-dinner ${isDragging ? 'dragging' : ''}`}
+                      onDragStart={(e) => {
+                        setDraggingMealId(meal.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', meal.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingMealId(null);
+                        setDragOverDay(null);
+                      }}
+                    >
+                      <span
+                        className="meal-drag-handle"
+                        aria-label={`Drag ${displayTitle} to another day`}
+                        title="Drag to another day"
+                        onTouchStart={() => {
+                          touchDragMealRef.current = meal.id;
+                          touchTargetDayRef.current = meal.dayIndex;
+                          setDraggingMealId(meal.id);
+                          setDragOverDay(meal.dayIndex);
+                        }}
+                        onTouchMove={handleTouchMoveOnHandle}
+                        onTouchEnd={handleTouchEndOnHandle}
+                        onTouchCancel={handleTouchEndOnHandle}
+                      >
+                        <GripVertical size={14} />
+                      </span>
+
                       <button
                         type="button"
                         className="planned-meal-media"
@@ -215,14 +310,26 @@ export function WeekPlannerView({
             </div>
 
             <div className="modal-body">
-              <input
-                type="text"
-                className="field-input"
-                placeholder="Find a recipe…"
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                autoFocus
-              />
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className="field-input"
+                  placeholder="Find a recipe…"
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className={`btn btn-sm ${pickerSortByProtein ? 'btn-sage' : 'btn-surface'}`}
+                  aria-pressed={pickerSortByProtein}
+                  style={{ flexShrink: 0 }}
+                  onClick={() => setPickerSortByProtein((prev) => !prev)}
+                >
+                  <ArrowUpDown size={13} />
+                  Protein
+                </button>
+              </div>
 
               {suggestion && !pickerSearch && (
                 <button
@@ -255,30 +362,66 @@ export function WeekPlannerView({
               )}
 
               <div className="picker-list">
-                {filteredPickerRecipes.map((rec) => (
-                  <button
-                    key={rec.id}
-                    type="button"
-                    className="picker-item"
-                    onClick={() => {
-                      onAddMeal(pickingDay, rec);
-                      setPickingDay(null);
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      {rec.image && <img src={rec.image} alt="" className="picker-thumb" />}
-                      <div>
-                        <div style={{ fontWeight: 500, fontSize: '0.92rem' }}>{rec.title}</div>
-                        <div className="recipe-card-meta">
-                          {[rec.prepMinutes ? `${rec.prepMinutes} min` : null, `${rec.servings} servings`]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </div>
+                {pickerSortByProtein
+                  ? pickerProteinGroups.map((group) => (
+                      <div key={group.protein} className="picker-protein-group">
+                        <div className="picker-protein-label">{group.protein}</div>
+                        {group.recipes.map((rec) => (
+                          <button
+                            key={rec.id}
+                            type="button"
+                            className="picker-item"
+                            onClick={() => {
+                              onAddMeal(pickingDay, rec);
+                              setPickingDay(null);
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                              {rec.image && <img src={rec.image} alt="" className="picker-thumb" />}
+                              <div>
+                                <div style={{ fontWeight: 500, fontSize: '0.92rem' }}>{rec.title}</div>
+                                <div className="recipe-card-meta">
+                                  {[
+                                    rec.prepMinutes ? `${rec.prepMinutes} min` : null,
+                                    `${rec.servings} servings`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </div>
+                              </div>
+                            </div>
+                            <Plus size={15} color="var(--ink-muted)" />
+                          </button>
+                        ))}
                       </div>
-                    </div>
-                    <Plus size={15} color="var(--ink-muted)" />
-                  </button>
-                ))}
+                    ))
+                  : filteredPickerRecipes.map((rec) => (
+                      <button
+                        key={rec.id}
+                        type="button"
+                        className="picker-item"
+                        onClick={() => {
+                          onAddMeal(pickingDay, rec);
+                          setPickingDay(null);
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          {rec.image && <img src={rec.image} alt="" className="picker-thumb" />}
+                          <div>
+                            <div style={{ fontWeight: 500, fontSize: '0.92rem' }}>{rec.title}</div>
+                            <div className="recipe-card-meta">
+                              {[
+                                rec.prepMinutes ? `${rec.prepMinutes} min` : null,
+                                `${rec.servings} servings`,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          </div>
+                        </div>
+                        <Plus size={15} color="var(--ink-muted)" />
+                      </button>
+                    ))}
               </div>
             </div>
           </div>
