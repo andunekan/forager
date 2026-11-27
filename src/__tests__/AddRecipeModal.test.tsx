@@ -126,4 +126,49 @@ describe('AddRecipeModal — multi-page recipe photos & Gemini Vision feedback',
     await user.click(screen.getByRole('button', { name: /add key/i }));
     expect(screen.getByLabelText(/gemini api key/i)).toBeInTheDocument();
   });
+
+  it('creates a recipe from a picture of a finished dish with an optional hint', async () => {
+    vi.spyOn(firebaseClient, 'isFirebaseAppCheckConfigured').mockReturnValue(true);
+    vi.spyOn(photoOcr, 'preprocessPhotoForOcr').mockImplementation(async (dataUrl) => ({
+      displayDataUrl: dataUrl,
+      ocrDataUrl: dataUrl,
+    }));
+
+    const firebaseVisionSpy = vi
+      .spyOn(firebaseVision, 'extractRecipeWithFirebaseAi')
+      .mockResolvedValue({
+        id: 'rec_dish_1',
+        title: 'Crispy Honey Glazed Salmon Bites',
+        servings: 4,
+        prepMinutes: 20,
+        ingredients: [parseIngredient('1 lb salmon fillets'), parseIngredient('2 tbsp honey')],
+        steps: ['Cube and sear salmon until crisp.', 'Toss in warm honey garlic glaze.'],
+        notes: 'Serve over jasmine rice.',
+        sourceType: 'photo',
+        createdAt: '2026-11-27T00:00:00Z',
+        updatedAt: '2026-11-27T00:00:00Z',
+      });
+
+    const user = userEvent.setup();
+    render(<AddRecipeModal firebaseEnabled onClose={vi.fn()} onAddRecipes={vi.fn()} />);
+
+    await user.click(screen.getByRole('tab', { name: /photo/i }));
+    await user.click(screen.getByRole('button', { name: /dish photo/i }));
+
+    await user.type(screen.getByLabelText(/dish hint/i), 'gluten-free');
+
+    const dishFile = new File(['dishphoto'], 'salmon-plate.jpg', { type: 'image/jpeg' });
+    await user.upload(screen.getByLabelText(/upload dish photo/i), dishFile);
+
+    await waitFor(() => {
+      expect(firebaseVisionSpy).toHaveBeenCalledTimes(1);
+    });
+
+    expect(firebaseVisionSpy.mock.calls[0][1]).toEqual({
+      mode: 'dish',
+      hint: 'gluten-free',
+    });
+    expect(screen.getByLabelText(/recipe name/i)).toHaveValue('Crispy Honey Glazed Salmon Bites');
+    expect(screen.getByRole('button', { name: /recreate recipe/i })).toBeInTheDocument();
+  });
 });

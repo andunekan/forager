@@ -100,4 +100,36 @@ describe('firebaseVision', () => {
       extractRecipeFromFirebaseModel(['data:image/jpeg;base64,ZmFrZQ=='], mockModel),
     ).rejects.toThrow(/App Check/i);
   });
+
+  it('uses a culinary reverse-engineering prompt with optional hint when scanning a finished dish photo', async () => {
+    const mockModel = {
+      generateContent: vi.fn().mockResolvedValue({
+        response: {
+          text: () =>
+            JSON.stringify({
+              title: 'Crispy Chili Garlic Ramen',
+              servings: 2,
+              prepMinutes: 25,
+              ingredients: ['2 packs ramen noodles', '2 tbsp chili crisp', '2 soft-boiled eggs'],
+              steps: ['Simmer savory garlic broth.', 'Top noodles with chili crisp and eggs.'],
+              notes: 'Garnish with scallions and toasted sesame seeds.',
+            }),
+        },
+      }),
+    };
+
+    const dishPhoto = 'data:image/jpeg;base64,ZGlzaA==';
+    const recipe = await extractRecipeFromFirebaseModel([dishPhoto], mockModel, {
+      mode: 'dish',
+      hint: 'make it extra spicy',
+    });
+
+    expect(mockModel.generateContent).toHaveBeenCalledTimes(1);
+    const sentParts = mockModel.generateContent.mock.calls[0][0] as Array<string | object>;
+    const promptText = String(sentParts[0]);
+    expect(promptText).toMatch(/finished meal|dish/i);
+    expect(promptText).toContain('make it extra spicy');
+    expect(recipe.title).toBe('Crispy Chili Garlic Ramen');
+    expect(recipe.image).toBe(dishPhoto);
+  });
 });

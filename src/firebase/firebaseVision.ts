@@ -1,4 +1,8 @@
-import { parseGeminiRecipeJson } from '../domain/photoOcr';
+import {
+  buildRecipeVisionPrompt,
+  parseGeminiRecipeJson,
+  type PhotoVisionOptions,
+} from '../domain/photoOcr';
 import type { Recipe } from '../types/recipe';
 import { getFirebaseVisionModel } from './firebaseClient';
 
@@ -14,19 +18,6 @@ export interface VisionModelLike {
   generateContent: (
     parts: Array<string | InlineImagePart>,
   ) => Promise<{ response: { text: () => string } }>;
-}
-
-function buildVisionPrompt(pageCount: number): string {
-  const lead =
-    pageCount > 1
-      ? `These ${pageCount} photos are consecutive pages of the same recipe. Combine all pages in order into one complete recipe in clean JSON with these exact keys:`
-      : 'Transcribe the recipe shown in this photo into clean JSON with these exact keys:';
-  return [
-    lead,
-    '{"title": string, "servings": number, "prepMinutes": number | null, "ingredients": string[], "steps": string[], "notes": string}.',
-    'Preserve exact ingredient quantities and fractions (e.g. "1 1/2 cups flour").',
-    'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photos.',
-  ].join(' ');
 }
 
 export function parseDataUrlToInlinePart(imageDataUrl: string): InlineImagePart {
@@ -46,16 +37,18 @@ export function parseDataUrlToInlinePart(imageDataUrl: string): InlineImagePart 
 export async function extractRecipeFromFirebaseModel(
   imageDataUrls: string | string[],
   model: VisionModelLike,
+  options: PhotoVisionOptions = {},
 ): Promise<Recipe> {
   const pages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrls]).filter(Boolean);
   if (pages.length === 0) {
     throw new Error('At least one recipe photo is required.');
   }
 
-  const parts: Array<string | InlineImagePart> = [buildVisionPrompt(pages.length)];
+  const mode = options.mode ?? 'recipe';
+  const parts: Array<string | InlineImagePart> = [buildRecipeVisionPrompt(pages.length, options)];
   pages.forEach((url, index) => {
     if (pages.length > 1) {
-      parts.push(`Page ${index + 1}:`);
+      parts.push(mode === 'dish' ? `Photo ${index + 1}:` : `Page ${index + 1}:`);
     }
     parts.push(parseDataUrlToInlinePart(url));
   });
@@ -83,10 +76,11 @@ export async function extractRecipeFromFirebaseModel(
 
 export async function extractRecipeWithFirebaseAi(
   imageDataUrls: string | string[],
+  options: PhotoVisionOptions = {},
 ): Promise<Recipe> {
   const model = getFirebaseVisionModel();
   if (!model) {
     throw new Error('Firebase AI Logic is not configured.');
   }
-  return extractRecipeFromFirebaseModel(imageDataUrls, model);
+  return extractRecipeFromFirebaseModel(imageDataUrls, model, options);
 }

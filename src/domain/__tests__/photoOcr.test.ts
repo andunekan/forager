@@ -127,4 +127,45 @@ describe('photoOcr', () => {
     expect(recipe.image).toBe(page1);
     expect(recipe.title).toBe('Multipage Braised Short Ribs');
   });
+
+  it('creates a recipe from a finished dish photo when mode is dish', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    title: 'Charred Street Corn Elote Bowl',
+                    servings: 4,
+                    prepMinutes: 20,
+                    ingredients: ['4 ears sweet corn', '1/3 cup cotija cheese', '1 lime'],
+                    steps: ['Char corn in a hot skillet.', 'Toss with lime, crema, and cotija.'],
+                    notes: 'Finish with Tajin or chili powder.',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const dishPhoto = 'data:image/jpeg;base64,ZWxvdGU=';
+    const recipe = await extractRecipeWithGeminiVision([dishPhoto], 'test-api-key', {
+      mode: 'dish',
+      hint: 'vegetarian',
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      contents: Array<{ parts: Array<{ text?: string }> }>;
+    };
+    expect(body.contents[0].parts[0].text).toMatch(/finished meal|dish/i);
+    expect(body.contents[0].parts[0].text).toContain('vegetarian');
+    expect(recipe.title).toBe('Charred Street Corn Elote Bowl');
+    expect(recipe.image).toBe(dishPhoto);
+  });
 });

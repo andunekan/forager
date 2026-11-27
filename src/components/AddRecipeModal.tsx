@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  BookOpen,
   Camera,
   Download,
   FileSpreadsheet,
@@ -9,6 +10,7 @@ import {
   RotateCw,
   Sparkles,
   Upload,
+  Utensils,
   X,
 } from 'lucide-react';
 import {
@@ -22,6 +24,7 @@ import { createId, formatIngredient, parseIngredient } from '../domain/ingredien
 import {
   extractRecipeWithGeminiVision,
   preprocessPhotoForOcr,
+  type PhotoScanMode,
 } from '../domain/photoOcr';
 import { importRecipeFromActiveTab, isChromeExtension } from '../extension/chromeBridge';
 import {
@@ -77,6 +80,8 @@ export function AddRecipeModal({
   const [fallbackPaste, setFallbackPaste] = useState('');
 
   // Multi-page Photo / Camera OCR & Vision state
+  const [photoMode, setPhotoMode] = useState<PhotoScanMode>('recipe');
+  const [dishHint, setDishHint] = useState('');
   const [photoPages, setPhotoPages] = useState<RecipePhotoPage[]>([]);
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
@@ -224,13 +229,24 @@ export function AddRecipeModal({
     }
   };
 
-  const runPhotoRecognition = async (pagesToScan: RecipePhotoPage[]) => {
+  const runPhotoRecognition = async (
+    pagesToScan: RecipePhotoPage[],
+    modeOverride?: PhotoScanMode,
+  ) => {
     if (pagesToScan.length === 0) return;
+
+    const mode = modeOverride ?? photoMode;
+    const isDish = mode === 'dish';
+    const trimmedHint = dishHint.trim();
+    const visionOptions = isDish
+      ? { mode: 'dish' as const, ...(trimmedHint ? { hint: trimmedHint } : {}) }
+      : { mode: 'recipe' as const };
 
     setOcrBusy(true);
     setVisionNotice(null);
     const pageCount = pagesToScan.length;
-    const pageLabel = pageCount === 1 ? 'photo' : `${pageCount} pages`;
+    const pageLabel =
+      pageCount === 1 ? (isDish ? 'dish photo' : 'photo') : isDish ? `${pageCount} dish photos` : `${pageCount} pages`;
     setOcrStatus(`Preparing ${pageLabel}…`);
 
     const processedPages: Array<{ page: RecipePhotoPage; ocrUrl: string }> = [];
@@ -254,41 +270,71 @@ export function AddRecipeModal({
     const displayUrls = updatedPages.map((p) => p.displayDataUrl);
 
     if (firebaseEnabled && appCheckReady) {
-      setOcrStatus(`Reading ${pageLabel} with Gemini 4 Hydrogen…`);
+      setOcrStatus(
+        isDish
+          ? 'Creating a recipe from your dish with Gemini 4 Hydrogen…'
+          : `Reading ${pageLabel} with Gemini 4 Hydrogen…`,
+      );
       try {
-        const visionRecipe = await extractRecipeWithFirebaseAi(displayUrls);
+        const visionRecipe = await extractRecipeWithFirebaseAi(displayUrls, visionOptions);
         applyScannedRecipeToFields(visionRecipe);
         setOcrStatus(
-          `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
+          isDish
+            ? 'Created a recipe from your dish — review, tweak, and save below.'
+            : `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
         );
         setOcrBusy(false);
         return;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Firebase AI Vision failed.';
-        setVisionNotice(`${msg} Fell back to local OCR.`);
+        setVisionNotice(isDish ? msg : `${msg} Fell back to local OCR.`);
       }
     } else if (firebaseEnabled && !appCheckReady && !hasDirectGeminiKey) {
       setVisionNotice(
-        'Firebase AI needs App Check enabled (reCAPTCHA Enterprise key) — using local OCR for now, or paste a free Gemini API key above to use Gemini 4 Hydrogen right away.',
+        isDish
+          ? 'Creating a recipe from a dish photo needs Gemini 4 Hydrogen (enable Firebase App Check or paste a free Gemini API key above).'
+          : 'Firebase AI needs App Check enabled (reCAPTCHA Enterprise key) — using local OCR for now, or paste a free Gemini API key above to use Gemini 4 Hydrogen right away.',
       );
     }
 
     const trimmedKey = geminiApiKey.trim();
     if (trimmedKey) {
-      setOcrStatus(`Reading ${pageLabel} with Gemini 4 Hydrogen…`);
+      setOcrStatus(
+        isDish
+          ? 'Creating a recipe from your dish with Gemini 4 Hydrogen…'
+          : `Reading ${pageLabel} with Gemini 4 Hydrogen…`,
+      );
       try {
-        const visionRecipe = await extractRecipeWithGeminiVision(displayUrls, trimmedKey);
+        const visionRecipe = await extractRecipeWithGeminiVision(
+          displayUrls,
+          trimmedKey,
+          visionOptions,
+        );
         applyScannedRecipeToFields(visionRecipe);
         setVisionNotice(null);
         setOcrStatus(
-          `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
+          isDish
+            ? 'Created a recipe from your dish — review, tweak, and save below.'
+            : `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
         );
         setOcrBusy(false);
         return;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Gemini Vision failed.';
-        setVisionNotice(`${msg} Fell back to local OCR.`);
+        setVisionNotice(isDish ? msg : `${msg} Fell back to local OCR.`);
       }
+    }
+
+    if (isDish) {
+      setHasScannedResult(true);
+      if (!visionNotice) {
+        setVisionNotice(
+          'Creating a recipe from a dish photo needs Gemini 4 Hydrogen Vision — add a free Gemini API key above, or fill in the recipe fields below.',
+        );
+      }
+      setOcrStatus('Dish photo attached — add a Gemini key above to auto-generate, or enter below.');
+      setOcrBusy(false);
+      return;
     }
 
     setOcrStatus(
@@ -734,6 +780,40 @@ export function AddRecipeModal({
 
           {tab === 'photo' && (
             <div className="form-grid">
+              {/* Photo mode toggle: transcribe a printed/handwritten recipe vs create a recipe from a finished dish */}
+              <div className="import-tabs" role="group" aria-label="Photo scan mode">
+                <button
+                  type="button"
+                  aria-pressed={photoMode === 'recipe'}
+                  className={`import-tab ${photoMode === 'recipe' ? 'active-tab' : ''}`}
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                  onClick={() => {
+                    setPhotoMode('recipe');
+                    if (photoPages.length > 0 && !ocrBusy) {
+                      void runPhotoRecognition(photoPages, 'recipe');
+                    }
+                  }}
+                >
+                  <BookOpen size={14} />
+                  Recipe page
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={photoMode === 'dish'}
+                  className={`import-tab ${photoMode === 'dish' ? 'active-tab' : ''}`}
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                  onClick={() => {
+                    setPhotoMode('dish');
+                    if (photoPages.length > 0 && !ocrBusy) {
+                      void runPhotoRecognition(photoPages, 'dish');
+                    }
+                  }}
+                >
+                  <Utensils size={14} />
+                  Dish photo
+                </button>
+              </div>
+
               {/* AI Vision status: Firebase AI Logic (with App Check) or optional BYO Gemini key */}
               <div className="bookmarklet-card" style={{ padding: '0.7rem 0.9rem' }}>
                 <div
@@ -760,7 +840,7 @@ export function AddRecipeModal({
                         ? 'Gemini 4 Hydrogen Vision active'
                         : firebaseEnabled
                           ? 'Firebase AI needs App Check — or add a Gemini key'
-                          : 'Gemini 4 Hydrogen optional (best for handwriting & cookbooks)'}
+                          : 'Gemini 4 Hydrogen optional (best for handwriting & dish photos)'}
                   </span>
                   {firebaseEnabled && appCheckReady && !firebaseUser && onSignInWithGoogle ? (
                     <button
@@ -799,13 +879,28 @@ export function AddRecipeModal({
                 )}
               </div>
 
+              {photoMode === 'dish' && (
+                <input
+                  type="text"
+                  className="field-input"
+                  value={dishHint}
+                  onChange={(e) => setDishHint(e.target.value)}
+                  placeholder='Optional hint (e.g. "spicy peanut sauce", "dairy-free", "air fryer")'
+                  aria-label="Dish hint"
+                />
+              )}
+
               {cameraActive ? (
                 <div className="form-grid">
                   <video ref={videoRef} className="camera-preview" playsInline muted />
                   <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
                     <button type="button" className="btn btn-sage" onClick={handleSnapCamera}>
                       <Camera size={15} />
-                      {photoPages.length > 0 ? `Capture page ${photoPages.length + 1}` : 'Capture'}
+                      {photoPages.length > 0
+                        ? photoMode === 'dish'
+                          ? `Capture photo ${photoPages.length + 1}`
+                          : `Capture page ${photoPages.length + 1}`
+                        : 'Capture'}
                     </button>
                     <button type="button" className="btn btn-ghost" onClick={stopCamera}>
                       Cancel
@@ -817,17 +912,19 @@ export function AddRecipeModal({
                   <label className="dropzone" style={{ flex: 1 }}>
                     <Upload size={20} color="var(--sage-ink)" />
                     <span style={{ fontSize: '0.88rem', fontWeight: 500 }}>
-                      Upload recipe photo(s)
+                      {photoMode === 'dish' ? 'Upload dish photo' : 'Upload recipe photo(s)'}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
-                      Pick 1 or multiple pages
+                      {photoMode === 'dish'
+                        ? 'Snap or pick a meal to turn into a recipe'
+                        : 'Pick 1 or multiple pages'}
                     </span>
                     <input
                       type="file"
                       accept="image/*"
                       multiple
                       className="sr-only"
-                      aria-label="Upload recipe photo"
+                      aria-label={photoMode === 'dish' ? 'Upload dish photo' : 'Upload recipe photo'}
                       onChange={(e) => {
                         void handlePhotoFiles(e.target.files);
                         e.target.value = '';
@@ -843,7 +940,7 @@ export function AddRecipeModal({
                     <Camera size={20} color="var(--lavender-ink)" />
                     <span style={{ fontSize: '0.88rem', fontWeight: 500 }}>Take a picture</span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
-                      Snap one or more pages
+                      {photoMode === 'dish' ? 'Photograph your dish' : 'Snap one or more pages'}
                     </span>
                   </button>
                 </div>
@@ -851,7 +948,7 @@ export function AddRecipeModal({
 
               {photoPages.length > 0 && activePage && (
                 <div className="form-grid" style={{ gap: '0.6rem' }}>
-                  {/* Multi-page thumbnail strip */}
+                  {/* Multi-page / multi-angle thumbnail strip */}
                   <div className="photo-pages-strip" role="list" aria-label="Recipe photo pages">
                     {photoPages.map((page, index) => (
                       <div
@@ -867,8 +964,10 @@ export function AddRecipeModal({
                           aria-label={`View page ${index + 1}`}
                           onClick={() => setActivePageIndex(index)}
                         >
-                          <img src={page.displayDataUrl} alt={`Recipe page ${index + 1}`} />
-                          <span className="photo-page-badge">P{index + 1}</span>
+                          <img src={page.displayDataUrl} alt={`Recipe photo ${index + 1}`} />
+                          <span className="photo-page-badge">
+                            {photoMode === 'dish' ? `#${index + 1}` : `P${index + 1}`}
+                          </span>
                         </button>
                         <button
                           type="button"
@@ -884,7 +983,7 @@ export function AddRecipeModal({
 
                     <label className="photo-page-add" aria-label="Add another photo page">
                       <Plus size={16} />
-                      <span>Add page</span>
+                      <span>{photoMode === 'dish' ? 'Add angle' : 'Add page'}</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -912,7 +1011,7 @@ export function AddRecipeModal({
 
                   <img
                     src={activePage.displayDataUrl}
-                    alt={`Captured recipe page ${Math.min(activePageIndex, photoPages.length - 1) + 1}`}
+                    alt={`Captured ${photoMode === 'dish' ? 'dish photo' : 'recipe page'} ${Math.min(activePageIndex, photoPages.length - 1) + 1}`}
                     className="recipe-hero-img"
                     style={{
                       maxHeight: '190px',
@@ -949,7 +1048,11 @@ export function AddRecipeModal({
                         disabled={ocrBusy}
                         onClick={() => void runPhotoRecognition(photoPages)}
                       >
-                        {photoPages.length > 1 ? `Scan ${photoPages.length} pages` : 'Rescan'}
+                        {photoMode === 'dish'
+                          ? 'Recreate recipe'
+                          : photoPages.length > 1
+                            ? `Scan ${photoPages.length} pages`
+                            : 'Rescan'}
                       </button>
                     </div>
                   </div>
@@ -1038,6 +1141,19 @@ export function AddRecipeModal({
                       className="field-textarea"
                       value={scannedSteps}
                       onChange={(e) => setScannedSteps(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="field-label" htmlFor="scan-notes">
+                      Notes
+                    </label>
+                    <input
+                      id="scan-notes"
+                      className="field-input"
+                      value={scannedNotes}
+                      onChange={(e) => setScannedNotes(e.target.value)}
+                      placeholder="Optional serving or flavor notes"
                     />
                   </div>
 

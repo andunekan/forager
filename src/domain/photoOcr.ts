@@ -205,23 +205,60 @@ export function parseGeminiRecipeJson(text: string, imageDataUrl?: string): Reci
   }
 }
 
+export type PhotoScanMode = 'recipe' | 'dish';
+
+export interface PhotoVisionOptions {
+  mode?: PhotoScanMode;
+  hint?: string;
+}
+
+export function buildRecipeVisionPrompt(
+  pageCount: number,
+  options: PhotoVisionOptions = {},
+): string {
+  const mode = options.mode ?? 'recipe';
+  const trimmedHint = options.hint?.trim();
+
+  if (mode === 'dish') {
+    const parts = [
+      pageCount > 1
+        ? `You are an expert home-cooking recipe developer. Study these ${pageCount} photos of a finished meal/dish closely (identify the dish, visible ingredients, sauces, garnishes, cooking method, and textures).`
+        : 'You are an expert home-cooking recipe developer. Study the finished meal/dish shown in this photo closely (identify the dish, visible ingredients, sauces, garnishes, cooking method, and textures).',
+      'Create a delicious, practical home recipe to recreate this dish in clean JSON with these exact keys:',
+      '{"title": string, "servings": number, "prepMinutes": number | null, "ingredients": string[], "steps": string[], "notes": string}.',
+      'Include realistic, well-proportioned ingredient quantities and fractions (e.g. "1 1/2 cups rice", "2 tbsp olive oil") and clear step-by-step cooking instructions.',
+      'Put brief flavor, substitution, or serving tips in notes.',
+    ];
+    if (trimmedHint) {
+      parts.push(`Incorporate this user preference or context: "${trimmedHint}".`);
+    }
+    return parts.join(' ');
+  }
+
+  const lead =
+    pageCount > 1
+      ? `These ${pageCount} photos are consecutive pages of the same recipe. Combine all pages in order into one complete recipe in clean JSON with these exact keys:`
+      : 'Transcribe the recipe shown in this photo into clean JSON with these exact keys:';
+  return [
+    lead,
+    '{"title": string, "servings": number, "prepMinutes": number | null, "ingredients": string[], "steps": string[], "notes": string}.',
+    'Preserve exact ingredient quantities and fractions (e.g. "1 1/2 cups flour").',
+    'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photos.',
+  ].join(' ');
+}
+
 export async function extractRecipeWithGeminiVision(
   imageDataUrls: string | string[],
   apiKey: string,
+  options: PhotoVisionOptions = {},
 ): Promise<Recipe> {
   const pages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrls]).filter(Boolean);
   if (pages.length === 0) {
     throw new Error('At least one recipe photo is required.');
   }
 
-  const prompt = [
-    pages.length > 1
-      ? `These ${pages.length} photos are consecutive pages of the same recipe. Combine all pages in order into one complete recipe in clean JSON with these exact keys:`
-      : 'Transcribe the recipe shown in this photo into clean JSON with these exact keys:',
-    '{"title": string, "servings": number, "prepMinutes": number | null, "ingredients": string[], "steps": string[], "notes": string}.',
-    'Preserve exact ingredient quantities and fractions (e.g. "1 1/2 cups flour").',
-    'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photos.',
-  ].join(' ');
+  const mode = options.mode ?? 'recipe';
+  const prompt = buildRecipeVisionPrompt(pages.length, options);
 
   const parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> = [
     { text: prompt },
@@ -233,7 +270,7 @@ export async function extractRecipeWithGeminiVision(
       throw new Error('Invalid photo format');
     }
     if (pages.length > 1) {
-      parts.push({ text: `Page ${index + 1}:` });
+      parts.push({ text: mode === 'dish' ? `Photo ${index + 1}:` : `Page ${index + 1}:` });
     }
     parts.push({
       inline_data: {
@@ -252,7 +289,7 @@ export async function extractRecipeWithGeminiVision(
       contents: [{ parts }],
       generationConfig: {
         responseMimeType: 'application/json',
-        temperature: 0.1,
+        temperature: mode === 'dish' ? 0.35 : 0.1,
       },
     }),
   });
