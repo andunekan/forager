@@ -42,4 +42,62 @@ describe('firebaseVision', () => {
     expect(recipe.steps).toHaveLength(2);
     expect(recipe.sourceType).toBe('photo');
   });
+
+  it('sends all pages together when given multiple recipe photos and uses page 1 as cover', async () => {
+    const mockModel = {
+      generateContent: vi.fn().mockResolvedValue({
+        response: {
+          text: () =>
+            JSON.stringify({
+              title: 'Two-Page Sourdough Focaccia',
+              servings: 8,
+              prepMinutes: 45,
+              ingredients: ['500 g bread flour', '3 tbsp olive oil', '2 tsp flaky salt'],
+              steps: [
+                'Mix dough on page 1 and rest overnight.',
+                'Dimple dough on page 2 and bake at 425F for 25 minutes.',
+              ],
+              notes: 'Great with rosemary.',
+            }),
+        },
+      }),
+    };
+
+    const page1 = 'data:image/jpeg;base64,cGFnZTE=';
+    const page2 = 'data:image/png;base64,cGFnZTI=';
+    const recipe = await extractRecipeFromFirebaseModel([page1, page2], mockModel);
+
+    expect(mockModel.generateContent).toHaveBeenCalledTimes(1);
+    const sentParts = mockModel.generateContent.mock.calls[0][0] as Array<
+      string | { type: string; inlineData: { mimeType: string; data: string } }
+    >;
+    const inlineParts = sentParts.filter((p) => typeof p !== 'string');
+    expect(inlineParts).toHaveLength(2);
+    expect(inlineParts[0]).toMatchObject({
+      type: 'inlineData',
+      inlineData: { mimeType: 'image/jpeg', data: 'cGFnZTE=' },
+    });
+    expect(inlineParts[1]).toMatchObject({
+      type: 'inlineData',
+      inlineData: { mimeType: 'image/png', data: 'cGFnZTI=' },
+    });
+    expect(recipe.image).toBe(page1);
+    expect(recipe.title).toBe('Two-Page Sourdough Focaccia');
+  });
+
+  it('surfaces a helpful App Check message when Firebase AI rejects unverified requests', async () => {
+    const mockModel = {
+      generateContent: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'AI: Error fetching: [401 Unauthorized] Firebase App Check token is invalid. (AI/fetch-error)',
+          ),
+        ),
+    };
+
+    await expect(
+      extractRecipeFromFirebaseModel(['data:image/jpeg;base64,ZmFrZQ=='], mockModel),
+    ).rejects.toThrow(/App Check/i);
+  });
 });

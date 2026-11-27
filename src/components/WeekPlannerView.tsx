@@ -93,65 +93,79 @@ export function WeekPlannerView({
 
                   return (
                     <div key={meal.id} className="planned-meal-card slot-dinner">
-                      {baseRecipe.image && (
-                        <img
-                          src={baseRecipe.image}
-                          alt=""
-                          className="planned-meal-thumb"
-                          decoding="sync"
-                        />
-                      )}
-                      <div className="planned-meal-top">
-                        <button
-                          type="button"
-                          className="planned-meal-title"
-                          onClick={() => onOpenRecipe(baseRecipe)}
-                        >
-                          {displayTitle}
-                        </button>
-                        <button
-                          type="button"
-                          className="planned-meal-remove"
-                          aria-label={`Remove ${displayTitle}`}
-                          onClick={() => onRemoveMeal(meal.id)}
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        className="planned-meal-media"
+                        aria-label={`Open ${displayTitle}`}
+                        onClick={() => onOpenRecipe(baseRecipe)}
+                      >
+                        {baseRecipe.image ? (
+                          <img
+                            src={baseRecipe.image}
+                            alt=""
+                            className="planned-meal-thumb"
+                            decoding="sync"
+                          />
+                        ) : (
+                          <span className="planned-meal-fallback" aria-hidden="true">
+                            {displayTitle.slice(0, 1)}
+                          </span>
+                        )}
+                      </button>
 
-                      <div className="planned-meal-footer">
-                        <div className="servings-stepper" aria-label="Servings">
+                      <div className="planned-meal-content">
+                        <div className="planned-meal-top">
                           <button
                             type="button"
-                            aria-label="Decrease servings"
-                            onClick={() =>
-                              onUpdateMeal({
-                                ...meal,
-                                servings: Math.max(1, meal.servings - 1),
-                              })
-                            }
+                            className="planned-meal-title"
+                            onClick={() => onOpenRecipe(baseRecipe)}
                           >
-                            <Minus size={11} />
+                            {displayTitle}
                           </button>
-                          <span>{meal.servings}</span>
                           <button
                             type="button"
-                            aria-label="Increase servings"
-                            onClick={() =>
-                              onUpdateMeal({ ...meal, servings: meal.servings + 1 })
-                            }
+                            className="planned-meal-remove"
+                            aria-label={`Remove ${displayTitle}`}
+                            onClick={() => onRemoveMeal(meal.id)}
                           >
-                            <Plus size={11} />
+                            <X size={13} />
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          className="adjust-link"
-                          onClick={() => setAdjustingMealId(meal.id)}
-                        >
-                          Adjust
-                        </button>
+                        <div className="planned-meal-footer">
+                          <div className="servings-stepper" aria-label="Servings">
+                            <button
+                              type="button"
+                              aria-label="Decrease servings"
+                              onClick={() =>
+                                onUpdateMeal({
+                                  ...meal,
+                                  servings: Math.max(1, meal.servings - 1),
+                                })
+                              }
+                            >
+                              <Minus size={11} />
+                            </button>
+                            <span>{meal.servings}</span>
+                            <button
+                              type="button"
+                              aria-label="Increase servings"
+                              onClick={() =>
+                                onUpdateMeal({ ...meal, servings: meal.servings + 1 })
+                              }
+                            >
+                              <Plus size={11} />
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="adjust-link"
+                            onClick={() => setAdjustingMealId(meal.id)}
+                          >
+                            Adjust
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -167,7 +181,7 @@ export function WeekPlannerView({
                       setPickingDay(dayIndex);
                     }}
                   >
-                    <Plus size={15} />
+                    <Plus size={14} />
                     <span>Add meal</span>
                   </button>
                 )}

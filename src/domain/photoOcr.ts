@@ -206,22 +206,42 @@ export function parseGeminiRecipeJson(text: string, imageDataUrl?: string): Reci
 }
 
 export async function extractRecipeWithGeminiVision(
-  imageDataUrl: string,
+  imageDataUrls: string | string[],
   apiKey: string,
 ): Promise<Recipe> {
-  const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
-    throw new Error('Invalid photo format');
+  const pages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrls]).filter(Boolean);
+  if (pages.length === 0) {
+    throw new Error('At least one recipe photo is required.');
   }
-  const mimeType = match[1];
-  const base64Data = match[2];
 
   const prompt = [
-    'Transcribe the recipe shown in this photo into clean JSON with these exact keys:',
+    pages.length > 1
+      ? `These ${pages.length} photos are consecutive pages of the same recipe. Combine all pages in order into one complete recipe in clean JSON with these exact keys:`
+      : 'Transcribe the recipe shown in this photo into clean JSON with these exact keys:',
     '{"title": string, "servings": number, "prepMinutes": number | null, "ingredients": string[], "steps": string[], "notes": string}.',
     'Preserve exact ingredient quantities and fractions (e.g. "1 1/2 cups flour").',
-    'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photo.',
+    'Combine multi-line steps into complete sentences. Do not invent ingredients not in the photos.',
   ].join(' ');
+
+  const parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> = [
+    { text: prompt },
+  ];
+
+  pages.forEach((url, index) => {
+    const match = url.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error('Invalid photo format');
+    }
+    if (pages.length > 1) {
+      parts.push({ text: `Page ${index + 1}:` });
+    }
+    parts.push({
+      inline_data: {
+        mime_type: match[1],
+        data: match[2],
+      },
+    });
+  });
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
 
@@ -229,14 +249,7 @@ export async function extractRecipeWithGeminiVision(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mimeType, data: base64Data } },
-          ],
-        },
-      ],
+      contents: [{ parts }],
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1,
@@ -245,9 +258,10 @@ export async function extractRecipeWithGeminiVision(
   });
 
   if (!resp.ok) {
-    const errText = resp.status === 400 || resp.status === 403
-      ? 'Gemini API key was rejected — check your key and try again.'
-      : `Gemini Vision request failed (${resp.status}).`;
+    const errText =
+      resp.status === 400 || resp.status === 403
+        ? 'Gemini API key was rejected — check your key and try again.'
+        : `Gemini Vision request failed (${resp.status}).`;
     throw new Error(errText);
   }
 
@@ -259,7 +273,7 @@ export async function extractRecipeWithGeminiVision(
     throw new Error('Gemini Vision returned an empty response.');
   }
 
-  const recipe = parseGeminiRecipeJson(jsonText, imageDataUrl);
+  const recipe = parseGeminiRecipeJson(jsonText, pages[0]);
   if (!recipe) {
     throw new Error('Could not parse structured recipe from Gemini Vision response.');
   }

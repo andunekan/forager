@@ -5,6 +5,7 @@ import {
   FileSpreadsheet,
   Globe,
   Link2,
+  Plus,
   RotateCw,
   Sparkles,
   Upload,
@@ -23,12 +24,22 @@ import {
   preprocessPhotoForOcr,
 } from '../domain/photoOcr';
 import { importRecipeFromActiveTab, isChromeExtension } from '../extension/chromeBridge';
-import type { FirebaseUserSummary } from '../firebase/firebaseClient';
+import {
+  isFirebaseAppCheckConfigured,
+  type FirebaseUserSummary,
+} from '../firebase/firebaseClient';
 import { extractRecipeWithFirebaseAi } from '../firebase/firebaseVision';
 import type { Recipe } from '../types/recipe';
 import { loadFromStorage, saveToStorage } from '../utils/storage';
 
 type ImportTab = 'write' | 'link' | 'photo' | 'spreadsheet';
+
+interface RecipePhotoPage {
+  id: string;
+  rawDataUrl: string;
+  displayDataUrl: string;
+  rotation: number;
+}
 
 const GEMINI_KEY_STORAGE = 'forager.geminiApiKey.v1';
 
@@ -65,11 +76,11 @@ export function AddRecipeModal({
   const [urlPreview, setUrlPreview] = useState<Recipe | null>(null);
   const [fallbackPaste, setFallbackPaste] = useState('');
 
-  // Photo / Camera OCR & Vision state
-  const [rawPhotoUrl, setRawPhotoUrl] = useState<string | null>(null);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [photoRotation, setPhotoRotation] = useState(0);
+  // Multi-page Photo / Camera OCR & Vision state
+  const [photoPages, setPhotoPages] = useState<RecipePhotoPage[]>([]);
+  const [activePageIndex, setActivePageIndex] = useState(0);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
+  const [visionNotice, setVisionNotice] = useState<string | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [scannedTitle, setScannedTitle] = useState('');
   const [scannedServings, setScannedServings] = useState('4');
@@ -87,6 +98,10 @@ export function AddRecipeModal({
   const [cameraActive, setCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  const appCheckReady = isFirebaseAppCheckConfigured();
+  const hasDirectGeminiKey = Boolean(geminiApiKey.trim());
+  const activePage = photoPages[Math.min(activePageIndex, Math.max(0, photoPages.length - 1))] ?? null;
 
   // Spreadsheet state
   const [sheetPreview, setSheetPreview] = useState<Recipe[]>([]);
@@ -148,10 +163,11 @@ export function AddRecipeModal({
   const handleSaveScannedPhoto = () => {
     if (!scannedTitle.trim()) return;
     const now = new Date().toISOString();
+    const coverImage = photoPages[0]?.displayDataUrl ?? undefined;
     const recipe: Recipe = {
       id: createId('rec'),
       title: scannedTitle.trim(),
-      image: photoPreview ?? undefined,
+      image: coverImage,
       servings: Math.max(1, parseInt(scannedServings, 10) || 4),
       prepMinutes: parseInt(scannedMinutes, 10) || undefined,
       ingredients: scannedIngredients
@@ -208,98 +224,161 @@ export function AddRecipeModal({
     }
   };
 
-  const runPhotoRecognition = async (sourceDataUrl: string, rotationDeg: number) => {
-    setOcrBusy(true);
-    setOcrStatus('Enhancing photo contrast…');
+  const runPhotoRecognition = async (pagesToScan: RecipePhotoPage[]) => {
+    if (pagesToScan.length === 0) return;
 
-    let displayUrl = sourceDataUrl;
-    let ocrUrl = sourceDataUrl;
-    try {
-      const processed = await preprocessPhotoForOcr(sourceDataUrl, rotationDeg);
-      displayUrl = processed.displayDataUrl;
-      ocrUrl = processed.ocrDataUrl;
-      setPhotoPreview(displayUrl);
-    } catch {
-      setPhotoPreview(sourceDataUrl);
+    setOcrBusy(true);
+    setVisionNotice(null);
+    const pageCount = pagesToScan.length;
+    const pageLabel = pageCount === 1 ? 'photo' : `${pageCount} pages`;
+    setOcrStatus(`Preparing ${pageLabel}…`);
+
+    const processedPages: Array<{ page: RecipePhotoPage; ocrUrl: string }> = [];
+    for (const page of pagesToScan) {
+      try {
+        const processed = await preprocessPhotoForOcr(page.rawDataUrl, page.rotation);
+        processedPages.push({
+          page: { ...page, displayDataUrl: processed.displayDataUrl },
+          ocrUrl: processed.ocrDataUrl,
+        });
+      } catch {
+        processedPages.push({
+          page,
+          ocrUrl: page.rawDataUrl,
+        });
+      }
     }
 
-    if (firebaseEnabled && firebaseUser) {
-      setOcrStatus('Reading recipe with Gemini Vision…');
+    const updatedPages = processedPages.map((item) => item.page);
+    setPhotoPages(updatedPages);
+    const displayUrls = updatedPages.map((p) => p.displayDataUrl);
+
+    if (firebaseEnabled && appCheckReady) {
+      setOcrStatus(`Reading ${pageLabel} with Gemini 4 Hydrogen…`);
       try {
-        const visionRecipe = await extractRecipeWithFirebaseAi(displayUrl);
+        const visionRecipe = await extractRecipeWithFirebaseAi(displayUrls);
         applyScannedRecipeToFields(visionRecipe);
-        setOcrStatus('Recognized with Gemini Vision — review and save below.');
+        setOcrStatus(
+          `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
+        );
         setOcrBusy(false);
         return;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Firebase AI Vision failed';
-        setOcrStatus(`${msg} Falling back to local OCR…`);
+        const msg = err instanceof Error ? err.message : 'Firebase AI Vision failed.';
+        setVisionNotice(`${msg} Fell back to local OCR.`);
       }
+    } else if (firebaseEnabled && !appCheckReady && !hasDirectGeminiKey) {
+      setVisionNotice(
+        'Firebase AI needs App Check enabled (reCAPTCHA Enterprise key) — using local OCR for now, or paste a free Gemini API key above to use Gemini 4 Hydrogen right away.',
+      );
     }
 
     const trimmedKey = geminiApiKey.trim();
     if (trimmedKey) {
-      setOcrStatus('Reading recipe with Gemini Vision…');
+      setOcrStatus(`Reading ${pageLabel} with Gemini 4 Hydrogen…`);
       try {
-        const visionRecipe = await extractRecipeWithGeminiVision(displayUrl, trimmedKey);
+        const visionRecipe = await extractRecipeWithGeminiVision(displayUrls, trimmedKey);
         applyScannedRecipeToFields(visionRecipe);
-        setOcrStatus('Recognized with Gemini Vision — review and save below.');
+        setVisionNotice(null);
+        setOcrStatus(
+          `Recognized ${pageLabel} with Gemini 4 Hydrogen — review and save below.`,
+        );
         setOcrBusy(false);
         return;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Gemini Vision failed';
-        setOcrStatus(`${msg} Falling back to local OCR…`);
+        const msg = err instanceof Error ? err.message : 'Gemini Vision failed.';
+        setVisionNotice(`${msg} Fell back to local OCR.`);
       }
     }
 
-    setOcrStatus('Reading printed text locally…');
+    setOcrStatus(
+      pageCount === 1
+        ? 'Reading printed text locally…'
+        : `Reading ${pageCount} pages locally…`,
+    );
     try {
       const Tesseract = await import('tesseract.js');
-      const { data } = await Tesseract.recognize(ocrUrl, 'eng', {
-        logger: (m: { status?: string; progress?: number }) => {
-          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-            setOcrStatus(`Reading printed text… ${Math.round(m.progress * 100)}%`);
-          }
-        },
-      });
-      const recognized = data.text.trim();
-      if (recognized) {
-        const parsed = parseOcrRecipeText(recognized, displayUrl);
+      const pageTexts: string[] = [];
+      for (let i = 0; i < processedPages.length; i += 1) {
+        const { data } = await Tesseract.recognize(processedPages[i].ocrUrl, 'eng', {
+          logger: (m: { status?: string; progress?: number }) => {
+            if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+              const prefix =
+                pageCount > 1
+                  ? `Reading page ${i + 1} of ${pageCount} locally…`
+                  : 'Reading printed text locally…';
+              setOcrStatus(`${prefix} ${Math.round(m.progress * 100)}%`);
+            }
+          },
+        });
+        const text = data.text.trim();
+        if (text) pageTexts.push(text);
+      }
+
+      const combinedText = pageTexts.join('\n\n').trim();
+      if (combinedText) {
+        const parsed = parseOcrRecipeText(combinedText, displayUrls[0]);
         applyScannedRecipeToFields(parsed);
         setOcrStatus(
-          'Review or refine below. For handwritten or magazine pages, add an optional Gemini Vision key above.',
+          `Scanned ${pageLabel} locally — review or refine below.`,
         );
       } else {
         setHasScannedResult(true);
-        setOcrStatus('Could not read text clearly — rotate photo, add a Gemini Vision key, or type below.');
+        setOcrStatus('Could not read text clearly — rotate a page, use Gemini Vision, or type below.');
       }
     } catch {
       setHasScannedResult(true);
-      setOcrStatus('Photo ready — enter or adjust the recipe fields below.');
+      setOcrStatus('Photos ready — enter or adjust the recipe fields below.');
     } finally {
       setOcrBusy(false);
     }
   };
 
-  const handlePhotoFile = (file: File | undefined) => {
-    if (!file) return;
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  const handlePhotoFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
     stopCamera();
-    setPhotoRotation(0);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '');
-      setRawPhotoUrl(dataUrl);
-      setPhotoPreview(dataUrl);
-      void runPhotoRecognition(dataUrl, 0);
-    };
-    reader.readAsDataURL(file);
+    const files = Array.from(fileList);
+    const dataUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file)));
+    const addedPages: RecipePhotoPage[] = dataUrls.filter(Boolean).map((url) => ({
+      id: createId('pg'),
+      rawDataUrl: url,
+      displayDataUrl: url,
+      rotation: 0,
+    }));
+    if (addedPages.length === 0) return;
+
+    const nextPages = [...photoPages, ...addedPages];
+    setPhotoPages(nextPages);
+    setActivePageIndex(nextPages.length - 1);
+    void runPhotoRecognition(nextPages);
   };
 
-  const handleRotatePhoto = () => {
-    if (!rawPhotoUrl) return;
-    const nextRot = (photoRotation + 90) % 360;
-    setPhotoRotation(nextRot);
-    void runPhotoRecognition(rawPhotoUrl, nextRot);
+  const handleRotateActivePage = () => {
+    if (!activePage) return;
+    const idx = Math.min(activePageIndex, photoPages.length - 1);
+    const nextPages = photoPages.map((page, i) =>
+      i === idx ? { ...page, rotation: (page.rotation + 90) % 360 } : page,
+    );
+    setPhotoPages(nextPages);
+    void runPhotoRecognition(nextPages);
+  };
+
+  const handleRemovePage = (pageId: string) => {
+    const nextPages = photoPages.filter((p) => p.id !== pageId);
+    setPhotoPages(nextPages);
+    setActivePageIndex((prev) => Math.max(0, Math.min(prev, nextPages.length - 1)));
+    if (nextPages.length === 0) {
+      setOcrStatus(null);
+      setVisionNotice(null);
+    }
   };
 
   const handleStartCamera = async () => {
@@ -335,10 +414,16 @@ export function AddRecipeModal({
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
       stopCamera();
-      setPhotoRotation(0);
-      setRawPhotoUrl(dataUrl);
-      setPhotoPreview(dataUrl);
-      void runPhotoRecognition(dataUrl, 0);
+      const newPage: RecipePhotoPage = {
+        id: createId('pg'),
+        rawDataUrl: dataUrl,
+        displayDataUrl: dataUrl,
+        rotation: 0,
+      };
+      const nextPages = [...photoPages, newPage];
+      setPhotoPages(nextPages);
+      setActivePageIndex(nextPages.length - 1);
+      void runPhotoRecognition(nextPages);
     }
   };
 
@@ -649,7 +734,7 @@ export function AddRecipeModal({
 
           {tab === 'photo' && (
             <div className="form-grid">
-              {/* AI Vision status: Firebase AI Logic when signed in, or optional BYO key */}
+              {/* AI Vision status: Firebase AI Logic (with App Check) or optional BYO Gemini key */}
               <div className="bookmarklet-card" style={{ padding: '0.7rem 0.9rem' }}>
                 <div
                   style={{
@@ -659,17 +744,25 @@ export function AddRecipeModal({
                     gap: '0.5rem',
                   }}
                 >
-                  <span style={{ fontSize: '0.82rem', color: 'var(--lavender-ink)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span
+                    style={{
+                      fontSize: '0.82rem',
+                      color: 'var(--lavender-ink)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                    }}
+                  >
                     <Sparkles size={14} />
-                    {firebaseEnabled && firebaseUser
-                      ? 'Gemini Vision ready via Google sign-in'
-                      : firebaseEnabled
-                        ? 'Sign in with Google for AI recipe photo scanning'
-                        : geminiApiKey.trim()
-                          ? 'Gemini Vision active (high accuracy)'
-                          : 'AI Vision optional (best for handwriting & cookbooks)'}
+                    {firebaseEnabled && appCheckReady
+                      ? 'Gemini 4 Hydrogen Vision ready'
+                      : hasDirectGeminiKey
+                        ? 'Gemini 4 Hydrogen Vision active'
+                        : firebaseEnabled
+                          ? 'Firebase AI needs App Check — or add a Gemini key'
+                          : 'Gemini 4 Hydrogen optional (best for handwriting & cookbooks)'}
                   </span>
-                  {firebaseEnabled && !firebaseUser && onSignInWithGoogle ? (
+                  {firebaseEnabled && appCheckReady && !firebaseUser && onSignInWithGoogle ? (
                     <button
                       type="button"
                       className="btn btn-lavender btn-sm"
@@ -677,18 +770,18 @@ export function AddRecipeModal({
                     >
                       Sign in
                     </button>
-                  ) : !firebaseEnabled ? (
+                  ) : !(firebaseEnabled && appCheckReady) ? (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
                       onClick={() => setShowVisionSettings((v) => !v)}
                     >
-                      {showVisionSettings ? 'Hide' : geminiApiKey.trim() ? 'Key saved' : 'Add key'}
+                      {showVisionSettings ? 'Hide' : hasDirectGeminiKey ? 'Key saved' : 'Add key'}
                     </button>
                   ) : null}
                 </div>
 
-                {!firebaseEnabled && showVisionSettings && (
+                {!(firebaseEnabled && appCheckReady) && showVisionSettings && (
                   <div className="form-grid" style={{ marginTop: '0.6rem', gap: '0.45rem' }}>
                     <input
                       type="password"
@@ -712,27 +805,33 @@ export function AddRecipeModal({
                   <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
                     <button type="button" className="btn btn-sage" onClick={handleSnapCamera}>
                       <Camera size={15} />
-                      Capture
+                      {photoPages.length > 0 ? `Capture page ${photoPages.length + 1}` : 'Capture'}
                     </button>
                     <button type="button" className="btn btn-ghost" onClick={stopCamera}>
                       Cancel
                     </button>
                   </div>
                 </div>
-              ) : (
+              ) : photoPages.length === 0 ? (
                 <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
                   <label className="dropzone" style={{ flex: 1 }}>
                     <Upload size={20} color="var(--sage-ink)" />
                     <span style={{ fontSize: '0.88rem', fontWeight: 500 }}>
-                      Upload recipe photo
+                      Upload recipe photo(s)
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
+                      Pick 1 or multiple pages
                     </span>
                     <input
                       type="file"
                       accept="image/*"
-                      capture="environment"
+                      multiple
                       className="sr-only"
                       aria-label="Upload recipe photo"
-                      onChange={(e) => handlePhotoFile(e.target.files?.[0])}
+                      onChange={(e) => {
+                        void handlePhotoFiles(e.target.files);
+                        e.target.value = '';
+                      }}
                     />
                   </label>
                   <button
@@ -743,19 +842,94 @@ export function AddRecipeModal({
                   >
                     <Camera size={20} color="var(--lavender-ink)" />
                     <span style={{ fontSize: '0.88rem', fontWeight: 500 }}>Take a picture</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
+                      Snap one or more pages
+                    </span>
                   </button>
                 </div>
-              )}
+              ) : null}
 
-              {photoPreview && (
-                <div className="form-grid" style={{ gap: '0.55rem' }}>
+              {photoPages.length > 0 && activePage && (
+                <div className="form-grid" style={{ gap: '0.6rem' }}>
+                  {/* Multi-page thumbnail strip */}
+                  <div className="photo-pages-strip" role="list" aria-label="Recipe photo pages">
+                    {photoPages.map((page, index) => (
+                      <div
+                        key={page.id}
+                        role="listitem"
+                        className={`photo-page-thumb ${
+                          activePage.id === page.id ? 'active' : ''
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="photo-page-select"
+                          aria-label={`View page ${index + 1}`}
+                          onClick={() => setActivePageIndex(index)}
+                        >
+                          <img src={page.displayDataUrl} alt={`Recipe page ${index + 1}`} />
+                          <span className="photo-page-badge">P{index + 1}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="photo-page-remove"
+                          aria-label={`Remove page ${index + 1}`}
+                          disabled={ocrBusy}
+                          onClick={() => handleRemovePage(page.id)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+
+                    <label className="photo-page-add" aria-label="Add another photo page">
+                      <Plus size={16} />
+                      <span>Add page</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="sr-only"
+                        aria-label="Add another recipe photo"
+                        disabled={ocrBusy}
+                        onChange={(e) => {
+                          void handlePhotoFiles(e.target.files);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      className="photo-page-add"
+                      disabled={ocrBusy}
+                      onClick={handleStartCamera}
+                    >
+                      <Camera size={15} />
+                      <span>Snap</span>
+                    </button>
+                  </div>
+
                   <img
-                    src={photoPreview}
-                    alt="Captured recipe"
+                    src={activePage.displayDataUrl}
+                    alt={`Captured recipe page ${Math.min(activePageIndex, photoPages.length - 1) + 1}`}
                     className="recipe-hero-img"
-                    style={{ maxHeight: '200px', objectFit: 'contain', background: 'var(--bg-subtle)' }}
+                    style={{
+                      maxHeight: '190px',
+                      objectFit: 'contain',
+                      background: 'var(--bg-subtle)',
+                    }}
                   />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.5rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     <span style={{ fontSize: '0.8rem', color: 'var(--ink-secondary)' }}>
                       {ocrStatus || ''}
                     </span>
@@ -764,7 +938,7 @@ export function AddRecipeModal({
                         type="button"
                         className="btn btn-surface btn-sm"
                         disabled={ocrBusy}
-                        onClick={handleRotatePhoto}
+                        onClick={handleRotateActivePage}
                       >
                         <RotateCw size={13} />
                         Rotate
@@ -772,15 +946,29 @@ export function AddRecipeModal({
                       <button
                         type="button"
                         className="btn btn-lavender btn-sm"
-                        disabled={ocrBusy || !rawPhotoUrl}
-                        onClick={() => {
-                          if (rawPhotoUrl) void runPhotoRecognition(rawPhotoUrl, photoRotation);
-                        }}
+                        disabled={ocrBusy}
+                        onClick={() => void runPhotoRecognition(photoPages)}
                       >
-                        Rescan
+                        {photoPages.length > 1 ? `Scan ${photoPages.length} pages` : 'Rescan'}
                       </button>
                     </div>
                   </div>
+
+                  {visionNotice && (
+                    <p
+                      role="status"
+                      style={{
+                        margin: 0,
+                        fontSize: '0.78rem',
+                        color: 'var(--blush-ink)',
+                        background: 'rgba(249, 232, 223, 0.55)',
+                        padding: '0.5rem 0.7rem',
+                        borderRadius: '10px',
+                      }}
+                    >
+                      {visionNotice}
+                    </p>
+                  )}
                 </div>
               )}
 

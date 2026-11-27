@@ -85,4 +85,46 @@ describe('photoOcr', () => {
     expect(recipe.ingredients).toHaveLength(3);
     expect(recipe.steps).toHaveLength(2);
   });
+
+  it('sends multiple recipe page photos together in a single Gemini Vision request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    title: 'Multipage Braised Short Ribs',
+                    servings: 6,
+                    prepMinutes: 150,
+                    ingredients: ['3 lbs beef short ribs', '2 cups red wine'],
+                    steps: ['Sear ribs from page 1.', 'Braise covered from page 2.'],
+                    notes: '',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const page1 = 'data:image/jpeg;base64,cGFnZTE=';
+    const page2 = 'data:image/jpeg;base64,cGFnZTI=';
+    const recipe = await extractRecipeWithGeminiVision([page1, page2], 'test-api-key');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      contents: Array<{ parts: Array<{ text?: string; inline_data?: { data: string } }> }>;
+    };
+    const imageParts = body.contents[0].parts.filter((p) => p.inline_data);
+    expect(imageParts).toHaveLength(2);
+    expect(imageParts[0].inline_data?.data).toBe('cGFnZTE=');
+    expect(imageParts[1].inline_data?.data).toBe('cGFnZTI=');
+    expect(recipe.image).toBe(page1);
+    expect(recipe.title).toBe('Multipage Braised Short Ribs');
+  });
 });

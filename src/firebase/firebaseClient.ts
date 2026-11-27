@@ -60,6 +60,10 @@ export function isFirebaseConfigured(): boolean {
   return readFirebaseEnv() !== null;
 }
 
+export function isFirebaseAppCheckConfigured(): boolean {
+  return Boolean(readFirebaseEnv()?.recaptchaSiteKey);
+}
+
 export function getFirebaseApp(): FirebaseApp | null {
   if (cachedApp) return cachedApp;
   const config = readFirebaseEnv();
